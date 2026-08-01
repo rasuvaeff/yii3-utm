@@ -1,0 +1,191 @@
+# rasuvaeff/yii3-utm
+
+UTM capture and marketing attribution for Yii3. Namespace `Rasuvaeff\Yii3Utm`.
+PHP 8.3–8.5, requires `ext-json` and `ext-mbstring`.
+
+Status: domain layer implemented. Capture middleware, attribution service and
+the `rasuvaeff/yii3-utm-db` storage adapter are not released yet.
+
+## Install
+
+```bash
+composer require rasuvaeff/yii3-utm
+```
+
+## Rules
+
+1. Everything from the client — query, headers, body, cookies, `localStorage` —
+   is untrusted. Values are normalised, truncated or dropped, never
+   authenticated.
+2. `occurredAt` is a claim by the source. It never decides ordering; the server
+   assigns order when a row is written, so a late delivery cannot become the
+   first touch.
+3. One business event produces one row per touchpoint. Idempotency is keyed by
+   the event id **and** the touchpoint, not by the event alone.
+4. Fingerprints and dedupe keys are derived from the touchpoint. They are never
+   constructor arguments — a mismatched fingerprint silently defeats the unique
+   index of the journal.
+5. Determinism is a storage requirement: `ClickIds` keeps whitelist order,
+   `UtmHistory::deduplicated()` keeps the oldest member of a similarity group,
+   and history sorting breaks ties by canonical signature. Input-order
+   dependence in any of the three writes duplicate rows.
+6. A click id without any `utm_*` is a valid touchpoint, not an empty request:
+   Google Ads auto-tagging sends a bare `gclid`.
+
+## API reference
+
+### UtmParameters
+
+Campaign tuple. `final readonly`, `@psalm-immutable`.
+
+```php
+use Rasuvaeff\Yii3Utm\UtmParameters;
+
+$utm = UtmParameters::fromArray([
+    'utm_source' => 'google', 'utm_medium' => 'cpc',
+    'utm_campaign' => 'summer', 'utm_term' => 'shoes',
+    'utm_content' => 'banner-a', 'utm_id' => 'c-42',
+]);
+
+new UtmParameters(source: 'google', medium: 'cpc');   // direct construction
+$utm->source; $utm->medium; $utm->campaign; $utm->term; $utm->content; $utm->id;
+$utm->isEmpty(): bool;
+$utm->equals(UtmParameters $other): bool;
+$utm->toArray(): array;   // keys: utm_source … utm_id
+```
+
+`fromArray()` accepts both `utm_source` and bare `source` (prefixed wins),
+strips control characters, trims, truncates to `UtmParameters::MAX_VALUE_LENGTH`
+(255) and turns empty results into `null`. Non-string values are dropped.
+
+### ClickIds
+
+Whitelisted advertising click identifiers.
+
+```php
+use Rasuvaeff\Yii3Utm\ClickIds;
+
+ClickIds::empty();
+$ids = ClickIds::fromArray(['gclid' => 'abc', 'fbclid' => 'def']);
+
+$ids->get(string $key): ?string;
+$ids->has(string $key): bool;
+$ids->isEmpty(): bool;
+$ids->count(): int;
+$ids->equals(ClickIds $other): bool;
+$ids->toArray(): array;   // whitelist order
+$ids->toJson(): string;   // '{}' when empty
+```
+
+`ClickIds::KNOWN_KEYS`: `gclid`, `gbraid`, `wbraid`, `fbclid`, `yclid`,
+`ttclid`, `msclkid`, `li_fat_id`, `twclid`. Values must match
+`/^[A-Za-z0-9._~-]+\z/` and be at most 255 bytes. Serialised length is capped
+at `MAX_SERIALIZED_LENGTH` (500) by dropping trailing keys.
+
+### Referrer
+
+```php
+use Rasuvaeff\Yii3Utm\Referrer;
+
+$referrer = Referrer::of('https://ads.example.com/landing');  // ?Referrer
+$referrer->url; $referrer->host;                              // host lowercased
+$referrer->isInternal('shop.example.com'): bool;
+$referrer->equals(Referrer $other): bool;
+```
+
+Takes an **already sanitised** absolute URL; returns `null` for relative URLs,
+empty input or a URL longer than 500 characters.
+
+### UtmTouchpoint
+
+```php
+use Rasuvaeff\Yii3Utm\UtmTouchpoint;
+
+$touchpoint = UtmTouchpoint::of(
+    utm: $utm,
+    occurredAt: new DateTimeImmutable('now', new DateTimeZone('UTC')),
+    clickIds: $ids,          // optional, defaults to ClickIds::empty()
+    referrer: $referrer,     // optional
+    landingPage: 'https://shop.example.com/summer',  // optional
+);
+
+$touchpoint->isEmpty(): bool;                    // no utm, no click id, no referrer
+$touchpoint->withOccurredAt(DateTimeImmutable): UtmTouchpoint;
+```
+
+Landing page is trimmed and truncated to 500 characters.
+
+### UtmHistory
+
+Ordered collection, newest first. `IteratorAggregate`, `Countable`.
+
+```php
+use Rasuvaeff\Yii3Utm\{UtmHistory, UtmSimilarity};
+
+UtmHistory::empty();
+$history = UtmHistory::of($first, $second);
+$history = $history->with($touchpoint);
+
+$history->deduplicated(UtmSimilarity::Campaign);  // keeps the OLDEST of a group
+$history->limited(5);                             // keeps the newest five
+$history->latest(): ?UtmTouchpoint;
+$history->oldest(): ?UtmTouchpoint;
+$history->all(): array;   // list<UtmTouchpoint>
+$history->count(): int;
+$history->isEmpty(): bool;
+```
+
+### UtmSimilarity
+
+```php
+UtmSimilarity::Full;          // campaign tuple + click ids
+UtmSimilarity::Campaign;      // source + medium + campaign
+UtmSimilarity::SourceMedium;  // source + medium
+
+$similarity->isSimilar(UtmTouchpoint $a, UtmTouchpoint $b): bool;  // reflexive, symmetric
+```
+
+### InteractionType
+
+Validated string, not an enum — a library cannot know a consumer's events.
+
+```php
+use Rasuvaeff\Yii3Utm\InteractionType;
+
+InteractionType::registration();
+InteractionType::purchase();
+InteractionType::of('trial_started');   // /^[a-z][a-z0-9_]{0,31}\z/, throws InvalidArgumentException
+$type->value; $type->equals($other); (string) $type;
+```
+
+### Channel and ChannelResolver
+
+Derived on read, never stored.
+
+```php
+use Rasuvaeff\Yii3Utm\{Channel, ChannelResolver, DefaultChannelResolver};
+
+$channel = (new DefaultChannelResolver())->resolve($touchpoint);
+```
+
+`Channel`: `Paid`, `Organic`, `Social`, `Email`, `Referral`, `Direct`, `Other`.
+
+Rule order: any click id → `Paid`; then `utm_medium` against the paid, email,
+social vocabularies plus literal `organic`/`referral`; then referrer host
+against social and search host lists; no campaign and no referrer → `Direct`.
+Vocabularies are constructor arguments (`paidMediums`, `emailMediums`,
+`socialMediums`, `socialHosts`, `searchHosts`), each defaulting to a public
+constant of the class.
+
+### LandingPageSanitizer
+
+```php
+interface LandingPageSanitizer
+{
+    public function sanitize(string $url): string;  // '' when nothing is left
+}
+```
+
+Implemented by the capture layer; reduces landing pages and referrers to what
+is safe to store (tokens and e-mail addresses routinely travel in query
+strings).

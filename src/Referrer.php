@@ -1,0 +1,64 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Rasuvaeff\Yii3Utm;
+
+/**
+ * The page a visitor arrived from.
+ *
+ * The value object accepts an already sanitised URL: stripping query
+ * parameters is the job of {@see LandingPageSanitizer} in the capture layer, so
+ * that this type stays free of service dependencies.
+ *
+ * Only the host takes part in the attribution fingerprint — a full URL with its
+ * query string would differ on every visit and defeat deduplication.
+ *
+ * @psalm-immutable
+ *
+ * @api
+ */
+final readonly class Referrer
+{
+    public const int MAX_URL_LENGTH = 500;
+    public const int MAX_HOST_LENGTH = 255;
+
+    /**
+     * @param non-empty-string $url
+     * @param non-empty-string $host
+     */
+    private function __construct(
+        public string $url,
+        public string $host,
+    ) {}
+
+    /**
+     * @param string $sanitizedUrl absolute URL already passed through a sanitizer
+     */
+    public static function of(string $sanitizedUrl): ?self
+    {
+        $url = \trim($sanitizedUrl);
+
+        if ($url === '' || \mb_strlen($url) > self::MAX_URL_LENGTH) {
+            return null;
+        }
+
+        $host = \parse_url($url, PHP_URL_HOST);
+
+        if (!\is_string($host) || $host === '' || \strlen($host) > self::MAX_HOST_LENGTH) {
+            return null;
+        }
+
+        return new self(url: $url, host: \mb_strtolower($host));
+    }
+
+    public function isInternal(string $currentHost): bool
+    {
+        return $this->host === \mb_strtolower(\trim($currentHost));
+    }
+
+    public function equals(self $other): bool
+    {
+        return $this->url === $other->url;
+    }
+}
