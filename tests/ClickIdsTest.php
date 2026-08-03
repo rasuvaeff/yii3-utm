@@ -96,6 +96,46 @@ final class ClickIdsTest
         Assert::true($ids->has('gclid'));
     }
 
+    public function acceptsKeysUpToTheSerializedBoundary(): void
+    {
+        $ids = ClickIds::fromArray([
+            'gclid' => \str_repeat('a', 255),
+            'fbclid' => \str_repeat('b', 221),
+        ]);
+
+        Assert::true($ids->has('gclid'));
+        Assert::true($ids->has('fbclid'));
+    }
+
+    public function dropsAKeyThatCrossesTheSerializedBoundary(): void
+    {
+        $ids = ClickIds::fromArray([
+            'gclid' => \str_repeat('a', 255),
+            'fbclid' => \str_repeat('b', 222),
+        ]);
+
+        Assert::true($ids->has('gclid'));
+        Assert::false($ids->has('fbclid'));
+    }
+
+    public function continuesAfterAnEntryThatDoesNotFit(): void
+    {
+        $ids = ClickIds::fromArray([
+            'gclid' => \str_repeat('a', 255),
+            'gbraid' => \str_repeat('b', 225),
+            'wbraid' => 'c',
+        ]);
+
+        Assert::true($ids->has('gclid'));
+        Assert::false($ids->has('gbraid'));
+        Assert::true($ids->has('wbraid'));
+    }
+
+    public function trimsSurroundingWhitespaceFromValues(): void
+    {
+        Assert::same(ClickIds::fromArray(['gclid' => '  abc123  '])->get('gclid'), 'abc123');
+    }
+
     public function equalsComparesContent(): void
     {
         Assert::true(ClickIds::fromArray(['gclid' => 'a'])->equals(ClickIds::fromArray(['gclid' => 'a'])));

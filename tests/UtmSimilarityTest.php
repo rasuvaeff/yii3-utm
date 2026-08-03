@@ -21,51 +21,59 @@ final class UtmSimilarityTest
 {
     public function fullComparesEveryCampaignFieldAndClickIds(): void
     {
-        $a = self::touchpoint(new UtmParameters(source: 'google', medium: 'cpc', content: 'banner-a'));
-        $b = self::touchpoint(new UtmParameters(source: 'google', medium: 'cpc', content: 'banner-b'));
+        $a = $this->touchpoint(new UtmParameters(source: 'google', medium: 'cpc', content: 'banner-a'));
+        $b = $this->touchpoint(new UtmParameters(source: 'google', medium: 'cpc', content: 'banner-b'));
 
         Assert::false(UtmSimilarity::Full->isSimilar($a, $b));
-        Assert::true(UtmSimilarity::Full->isSimilar($a, self::touchpoint($a->utm)));
+        Assert::true(UtmSimilarity::Full->isSimilar($a, $this->touchpoint($a->utm)));
     }
 
     public function fullDistinguishesByClickId(): void
     {
         $utm = new UtmParameters(source: 'google', medium: 'cpc');
-        $a = self::touchpoint($utm, ClickIds::fromArray(['gclid' => 'one']));
-        $b = self::touchpoint($utm, ClickIds::fromArray(['gclid' => 'two']));
+        $a = $this->touchpoint($utm, ClickIds::fromArray(['gclid' => 'one']));
+        $b = $this->touchpoint($utm, ClickIds::fromArray(['gclid' => 'two']));
 
         Assert::false(UtmSimilarity::Full->isSimilar($a, $b));
     }
 
     public function campaignIgnoresTermAndContent(): void
     {
-        $a = self::touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'summer', content: 'a'));
-        $b = self::touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'summer', content: 'b'));
+        $a = $this->touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'summer', content: 'a'));
+        $b = $this->touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'summer', content: 'b'));
 
         Assert::true(UtmSimilarity::Campaign->isSimilar($a, $b));
     }
 
     public function campaignSeparatesDifferentCampaigns(): void
     {
-        $a = self::touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'summer'));
-        $b = self::touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'winter'));
+        $a = $this->touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'summer'));
+        $b = $this->touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'winter'));
+
+        Assert::false(UtmSimilarity::Campaign->isSimilar($a, $b));
+    }
+
+    public function campaignRequiresBothSourceAndMedium(): void
+    {
+        $a = $this->touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'summer'));
+        $b = $this->touchpoint(new UtmParameters(source: 'bing', medium: 'cpc', campaign: 'summer'));
 
         Assert::false(UtmSimilarity::Campaign->isSimilar($a, $b));
     }
 
     public function sourceMediumIgnoresCampaign(): void
     {
-        $a = self::touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'summer'));
-        $b = self::touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'winter'));
+        $a = $this->touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'summer'));
+        $b = $this->touchpoint(new UtmParameters(source: 'google', medium: 'cpc', campaign: 'winter'));
 
         Assert::true(UtmSimilarity::SourceMedium->isSimilar($a, $b));
-        Assert::false(UtmSimilarity::SourceMedium->isSimilar($a, self::touchpoint(new UtmParameters(source: 'bing', medium: 'cpc'))));
+        Assert::false(UtmSimilarity::SourceMedium->isSimilar($a, $this->touchpoint(new UtmParameters(source: 'bing', medium: 'cpc'))));
     }
 
     #[Property(runs: 200)]
     public function isReflexive(UtmSimilarity $similarity, ?string $source, ?string $medium, ?string $campaign): void
     {
-        $touchpoint = self::touchpoint(new UtmParameters(source: $source, medium: $medium, campaign: $campaign));
+        $touchpoint = $this->touchpoint(new UtmParameters(source: $source, medium: $medium, campaign: $campaign));
 
         Assert::true($similarity->isSimilar($touchpoint, $touchpoint));
     }
@@ -93,8 +101,8 @@ final class UtmSimilarityTest
         ?string $mediumB,
         ?string $campaignB,
     ): void {
-        $a = self::touchpoint(new UtmParameters(source: $sourceA, medium: $mediumA, campaign: $campaignA));
-        $b = self::touchpoint(new UtmParameters(source: $sourceB, medium: $mediumB, campaign: $campaignB));
+        $a = $this->touchpoint(new UtmParameters(source: $sourceA, medium: $mediumA, campaign: $campaignA));
+        $b = $this->touchpoint(new UtmParameters(source: $sourceB, medium: $mediumB, campaign: $campaignB));
 
         Assert::same($similarity->isSimilar($a, $b), $similarity->isSimilar($b, $a));
     }
@@ -120,7 +128,7 @@ final class UtmSimilarityTest
         return Gen::nullable(Gen::elements(['google', 'bing', 'cpc', 'organic', 'summer', 'winter']));
     }
 
-    private static function touchpoint(UtmParameters $utm, ?ClickIds $clickIds = null): UtmTouchpoint
+    private function touchpoint(UtmParameters $utm, ?ClickIds $clickIds = null): UtmTouchpoint
     {
         return UtmTouchpoint::of(
             utm: $utm,

@@ -57,7 +57,7 @@ final readonly class ClickIds
     }
 
     /**
-     * @param array<string, mixed> $data untrusted map
+     * @param array<array-key, mixed> $data untrusted map
      */
     public static function fromArray(array $data): self
     {

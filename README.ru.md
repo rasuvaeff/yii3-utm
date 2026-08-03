@@ -15,9 +15,9 @@ id и referrer, короткая история касаний и append-only ж
 > для LLM. Пакет также раздаёт agent skill через
 > [llm/skills](https://github.com/roxblnfk/skills).
 
-**Статус: в работе.** Доменный слой, описанный ниже, реализован и покрыт
-тестами; capture-middleware, сервис атрибуции и адаптер хранения
-`rasuvaeff/yii3-utm-db` добавляются следующими.
+**Статус: функционально готово.** Для portable-хранения на `yiisoft/db`
+используйте `rasuvaeff/yii3-utm-db`, реализацию приложения или поставляемый
+in-memory репозиторий в тестах.
 
 ## Требования
 
@@ -147,6 +147,139 @@ $channel = (new DefaultChannelResolver())->resolve($touchpoint);
 
 Порядок правил: click id → `utm_medium` → хост referrer. Словари (paid-, email-
 и social-medium'ы, social- и search-хосты) задаются аргументами конструктора.
+
+### Захват
+
+Один middleware; поддерживаемые транспорты — это конфигурация, а не отдельные
+классы.
+
+```php
+use Rasuvaeff\Yii3Utm\UtmCaptureMiddleware;
+
+// web-пайплайн
+UtmCaptureMiddleware::class,
+```
+
+```php
+use Rasuvaeff\Yii3Utm\UtmRequest;
+
+UtmRequest::current($request);    // ?UtmTouchpoint — касание этого запроса
+UtmRequest::history($request);    // UtmHistory — сохранённая, может быть пустой
+UtmRequest::effective($request);  // ?UtmTouchpoint — current ?? самое свежее сохранённое
+```
+
+Атрибуты выставляются всегда — код ниже по стеку никогда не различает
+«middleware не отработал» и «нечего было захватывать».
+
+| Транспорт | Источник | Для чего |
+|---|---|---|
+| Query string | `QueryUtmSource` | Server-rendered страницы; заодно landing page и `Referer` |
+| Заголовки `X-Utm-*` | `HeaderUtmSource` | SPA и API-клиенты; click id передаются JSON-объектом в `X-Utm-Click-Ids` |
+| Вложенный ключ `utm` в теле | `BodyUtmSource` | SPA и API; рекомендуемый cross-domain транспорт |
+
+Все три источника отбрасывают referrer, совпадающий по host с самим текущим
+запросом (`Referrer::external()`, не `Referrer::of()`): переход между
+страницами своего же сайта — не касание, к которому стоит привязывать визит.
+
+История живёт в **одной** cookie (по умолчанию `utm_history`), кодируется
+`UtmCookieCodec`: `HttpOnly`, `Secure`, `SameSite=Lax`, 30 дней. Клиентский
+профиль (`httpOnly: false`) существует для чтения из SPA на том же домене и по
+определению подделываем. `DefaultLandingPageSanitizer` — поставляемая реализация — оставляет scheme, host,
+порт и path, выбрасывает fragment и все query-параметры вне allow-list (по
+умолчанию `utm_*` и click id) и обрезает до 500 символов.
+
+`NullUtmHistoryStore` не хранит ничего — правильный
+выбор для stateless-API и кэшируемых роутов: иначе захват добавляет
+`Set-Cookie` и делает ответ некэшируемым.
+
+| Опция | По умолчанию | Эффект |
+|---|---|---|
+| `enabled` | `true` | Общий выключатель |
+| `ignoredPaths` | `[]` | Префиксы путей, которые пропускаются |
+| `similarity` | `Full` | Что считать «той же кампанией» |
+| `updateExisting` | `false` | Дописывать ли касание, похожее на последнее сохранённое |
+| `captureOrganic` | `false` | Считать ли касанием визит без кампании и без click id |
+| `maxTouchpoints` | `5` | Ограничение истории |
+| `maxTouchpointAge` | 90 дней | Окно, в которое клампится заявленный `occurredAt` |
+| `clearHistoryWithoutConsent` | `false` | Гасить ли сохранённую историю при отсутствии согласия |
+
+### Согласие
+
+`ConsentPolicy::allowsPersistence()` управляет всем: без согласия ничего не
+читается и ничего не пишется. По умолчанию — `AllowAllConsentPolicy`, для
+приложений, где согласие проверяется раньше по стеку.
+
+```php
+use Rasuvaeff\Yii3Utm\CallbackConsentPolicy;
+
+new CallbackConsentPolicy(
+    static fn (ServerRequestInterface $r): bool => $consentBanner->accepted($r),
+);
+```
+
+Имя метода совпадает с `rasuvaeff/yii3-ab-testing-web` — приложение, где
+политика уже есть, переиспользует её одной строкой.
+
+### Конфигурация
+
+Пакет поставляет `config/di.php` и `config/params.php` для `yiisoft/config`.
+Он биндит capture-стек, кодек, санитайзер, резолвер канала и дефолтную
+политику согласия — и сознательно **не** биндит `UtmAttributionRepository`,
+у которого должен быть ровно один источник.
+
+Группа параметров `rasuvaeff/yii3-utm` открывает:
+
+- `capture.sources.query.utmKeys` и `clickIdKeys`;
+- `capture.sources.header.prefix` и `clickIdKeys`;
+- `capture.sources.body.key` и `clickIdKeys`;
+- `sanitizer.allowedQueryKeys` и `maxLength`;
+- `channel.paidMediums`, `emailMediums`, `socialMediums`, `socialHosts` и
+  `searchHosts`.
+
+### Атрибуция
+
+Бизнес-событие превращается в строку на каждое касание. `UtmAttribution` сам
+вычисляет `fingerprint` и `dedupeKey` — они никогда не приходят аргументами
+конструктора, потому что рассогласованный fingerprint молча ломает
+unique-индекс журнала.
+
+```php
+use Rasuvaeff\Yii3Utm\{InteractionType, UtmAttributionEvent, UtmAttributionService};
+
+$service = new UtmAttributionService($repository);   // репозиторий даёт -db или приложение
+
+$service->record(new UtmAttributionEvent(
+    entityId: (string) $user->getId(),
+    eventId: $order->getUuid(),           // стабилен при retry, новый для нового события
+    interactionType: InteractionType::purchase(),
+    history: $history,
+));   // возвращает число реально созданных строк
+```
+
+| Гарантия | Детали |
+|---|---|
+| Retry того же события | Не пишет ничего: дедуп по event id **и** касанию |
+| Действительно новое событие | Пишет строки даже при идентичной кампании |
+| Частичная запись | Самовосстанавливается: повторная доставка допишет недостающее и не продублирует существующее — поэтому пачка не обёрнута в транзакцию |
+| Порядок | От старого касания к новому; канонический порядок назначает сервер при записи |
+| Пустые касания | Пропускаются — строка, которая ничего не атрибутирует, это шум |
+
+`UtmAttributionEventHandler` — готовый слушатель (`__invoke`), но пакет его не
+подписывает: проводка — решение приложения.
+
+### Хранение
+
+`UtmAttributionRepository` — контракт хранения: `append()`, `findByEntity()`,
+`findFirst()`, `findLast()`, `countByEntity()`, `deleteByEntity()`,
+`purgeOlderThan()`, `countOlderThan()` (что удалил бы `purgeOlderThan()`, без
+удаления — для dry-run). Ядро **его не биндит**: реализацию даёт
+`rasuvaeff/yii3-utm-db` либо приложение. `InMemoryUtmAttributionRepository` поставляется для тестов и возвращает
+`InMemoryUtmAttributionRecord`; в контейнере не биндится.
+
+
+Реализация обязана делать `append()` race-safe — upsert без действия при
+конфликте либо insert с обработкой duplicate key. «Проверить, потом вставить» —
+недостаточно.
 
 ## Безопасность
 

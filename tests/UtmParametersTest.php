@@ -92,6 +92,40 @@ final class UtmParametersTest
         Assert::same(\mb_strlen((string) $source), UtmParameters::MAX_VALUE_LENGTH);
     }
 
+    public function truncatesMultibyteByCodePointsNotBytes(): void
+    {
+        $source = UtmParameters::fromArray(['utm_source' => \str_repeat('а', 300)])->source;
+
+        Assert::same(\mb_strlen((string) $source), UtmParameters::MAX_VALUE_LENGTH);
+        Assert::true(\str_contains((string) $source, 'а'));
+    }
+
+    #[DataProvider('singleFieldProvider')]
+    public function aSingleFieldMakesItNonEmpty(string $key, string $value): void
+    {
+        Assert::false(UtmParameters::fromArray([$key => $value])->isEmpty());
+    }
+
+    public static function singleFieldProvider(): iterable
+    {
+        yield 'utm_source' => ['utm_source', 'google'];
+
+        yield 'utm_medium' => ['utm_medium', 'cpc'];
+
+        yield 'utm_campaign' => ['utm_campaign', 'summer'];
+
+        yield 'utm_term' => ['utm_term', 'shoes'];
+
+        yield 'utm_content' => ['utm_content', 'banner'];
+
+        yield 'utm_id' => ['utm_id', 'c-1'];
+    }
+
+    public function mediumAloneWithSourceIsNotEmpty(): void
+    {
+        Assert::false(UtmParameters::fromArray(['utm_source' => 'google', 'utm_medium' => 'cpc'])->isEmpty());
+    }
+
     public function emptyInputProducesEmptyParameters(): void
     {
         Assert::true(UtmParameters::fromArray([])->isEmpty());

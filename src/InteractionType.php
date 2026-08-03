@@ -18,7 +18,7 @@ namespace Rasuvaeff\Yii3Utm;
  *
  * @api
  */
-final readonly class InteractionType
+final readonly class InteractionType implements \Stringable
 {
     public const int MAX_LENGTH = 32;
     public const string PATTERN = '/^[a-z][a-z0-9_]{0,31}\z/';
@@ -54,6 +54,7 @@ final readonly class InteractionType
         return $this->value === $other->value;
     }
 
+    #[\Override]
     public function __toString(): string
     {
         return $this->value;

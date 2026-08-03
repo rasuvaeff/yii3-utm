@@ -16,9 +16,9 @@ business event.
 > written for LLMs. The package also ships an agent skill through
 > [llm/skills](https://github.com/roxblnfk/skills).
 
-**Status: work in progress.** The domain layer described below is implemented
-and covered; the capture middleware, the attribution service and the
-`rasuvaeff/yii3-utm-db` storage adapter are being added next.
+**Status: feature-complete.** Use `rasuvaeff/yii3-utm-db` for portable
+`yiisoft/db` persistence, provide an application repository, or use the
+shipped in-memory implementation in tests.
 
 ## Requirements
 
@@ -149,6 +149,141 @@ $channel = (new DefaultChannelResolver())->resolve($touchpoint);
 
 Rule order: click id → `utm_medium` → referrer host. Vocabularies (paid, email
 and social mediums, social and search hosts) are constructor arguments.
+
+### Capture
+
+One middleware; the transports it understands are configuration, not separate
+classes.
+
+```php
+use Rasuvaeff\Yii3Utm\UtmCaptureMiddleware;
+
+// web pipeline
+UtmCaptureMiddleware::class,
+```
+
+```php
+use Rasuvaeff\Yii3Utm\UtmRequest;
+
+UtmRequest::current($request);    // ?UtmTouchpoint — carried by this request
+UtmRequest::history($request);    // UtmHistory — stored, may be empty
+UtmRequest::effective($request);  // ?UtmTouchpoint — current ?? newest stored
+```
+
+The attributes are always set, so downstream code never distinguishes "the
+middleware did not run" from "nothing was captured".
+
+| Transport | Source | Use for |
+|---|---|---|
+| Query string | `QueryUtmSource` | Server-rendered pages; landing page and `Referer` are captured too |
+| `X-Utm-*` headers | `HeaderUtmSource` | SPA and API clients; click ids use JSON in `X-Utm-Click-Ids` |
+| Nested `utm` body key | `BodyUtmSource` | SPA and API; the recommended cross-domain transport |
+
+All three sources drop a referrer that matches the current request's own host
+(`Referrer::external()`, not `Referrer::of()`): navigating from one page of
+your site to another is not a touchpoint to attribute the visit to.
+
+History lives in a **single** cookie (`utm_history` by default) encoded by
+`UtmCookieCodec`: `HttpOnly`, `Secure`, `SameSite=Lax`, 30 days. A client
+profile (`httpOnly: false`) exists for same-domain SPA reads and is spoofable by
+definition. `DefaultLandingPageSanitizer` — the shipped implementation — keeps scheme, host,
+port and path, drops the fragment and every query parameter outside its
+allow-list (`utm_*` and click ids by default), and truncates to 500 characters.
+
+`NullUtmHistoryStore` stores nothing — the right choice for
+stateless APIs and cacheable routes, since capture otherwise adds a
+`Set-Cookie` header and makes a response uncacheable.
+
+| Option | Default | Effect |
+|---|---|---|
+| `enabled` | `true` | Master switch |
+| `ignoredPaths` | `[]` | Path prefixes to skip |
+| `similarity` | `Full` | What counts as "the same campaign" |
+| `updateExisting` | `false` | Whether a touchpoint similar to the newest stored one is appended |
+| `captureOrganic` | `false` | Whether a visit with neither campaign nor click id becomes a touchpoint |
+| `maxTouchpoints` | `5` | History cap |
+| `maxTouchpointAge` | 90 days | Window a claimed `occurredAt` is clamped into |
+| `clearHistoryWithoutConsent` | `false` | Whether a stored history is expired when consent is absent |
+
+### Consent
+
+`ConsentPolicy::allowsPersistence()` gates the whole thing: without consent
+nothing is read and nothing is written. The default is `AllowAllConsentPolicy`
+— for applications where consent is enforced earlier in the stack.
+
+```php
+use Rasuvaeff\Yii3Utm\CallbackConsentPolicy;
+
+new CallbackConsentPolicy(
+    static fn (ServerRequestInterface $r): bool => $consentBanner->accepted($r),
+);
+```
+
+The method name matches `rasuvaeff/yii3-ab-testing-web`, so an application that
+already has a policy reuses it in one line.
+
+### Configuration
+
+The package ships `config/di.php` and `config/params.php` for
+`yiisoft/config`. It binds the capture stack, the codec, the sanitizer, the
+channel resolver and the consent default — and deliberately **not**
+`UtmAttributionRepository`, which must come from exactly one source.
+
+The `rasuvaeff/yii3-utm` params group exposes:
+
+- `capture.sources.query.utmKeys` and `clickIdKeys`;
+- `capture.sources.header.prefix` and `clickIdKeys`;
+- `capture.sources.body.key` and `clickIdKeys`;
+- `sanitizer.allowedQueryKeys` and `maxLength`;
+- `channel.paidMediums`, `emailMediums`, `socialMediums`, `socialHosts` and
+  `searchHosts`.
+
+### Attribution
+
+A business event becomes one row per touchpoint. `UtmAttribution` derives its
+own `fingerprint` and `dedupeKey` — they are never constructor arguments,
+because a mismatched fingerprint would silently defeat the unique index of the
+journal.
+
+```php
+use Rasuvaeff\Yii3Utm\{InteractionType, UtmAttributionEvent, UtmAttributionService};
+
+$service = new UtmAttributionService($repository);   // repository comes from -db or the app
+
+$service->record(new UtmAttributionEvent(
+    entityId: (string) $user->getId(),
+    eventId: $order->getUuid(),           // stable across retries, new for a new event
+    interactionType: InteractionType::purchase(),
+    history: $history,
+));   // returns the number of rows actually created
+```
+
+| Guarantee | Detail |
+|---|---|
+| Retry of the same event | Writes nothing: deduplication is keyed by event id **and** touchpoint |
+| A genuinely new event | Writes rows even for an identical campaign |
+| Partial write | Self-healing — redelivery adds what is missing and duplicates nothing, which is why no transaction wraps the batch |
+| Order | Oldest touchpoint first; server assigns the canonical order at write time |
+| Empty touchpoints | Skipped — a row attributing nothing is noise |
+
+`UtmAttributionEventHandler` is a ready listener (`__invoke`), but the package
+does not subscribe it: wiring is the application's decision.
+
+### Storage
+
+`UtmAttributionRepository` is the storage contract — `append()`,
+`findByEntity()`, `findFirst()`, `findLast()`, `countByEntity()`,
+`deleteByEntity()`, `purgeOlderThan()` and `countOlderThan()` (what
+`purgeOlderThan()` would remove, without removing it — for a dry run). The
+core **does not bind it**: an
+implementation comes from `rasuvaeff/yii3-utm-db` or from the application.
+`InMemoryUtmAttributionRepository` is shipped for tests and returns
+`InMemoryUtmAttributionRecord` instances; it is never bound.
+
+
+Implementations must make `append()` race-safe — an upsert that does nothing on
+conflict, or an insert whose duplicate-key error is handled. "Check, then
+insert" is not enough.
 
 ## Security
 

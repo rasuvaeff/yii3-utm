@@ -18,7 +18,6 @@ use Testo\Test;
 
 #[Test]
 #[Covers(DefaultChannelResolver::class)]
-#[Covers(Channel::class)]
 final class DefaultChannelResolverTest
 {
     private DefaultChannelResolver $resolver;
@@ -31,10 +30,7 @@ final class DefaultChannelResolverTest
 
     public function clickIdOutranksEverything(): void
     {
-        $touchpoint = self::touchpoint(
-            utm: new UtmParameters(medium: 'organic'),
-            clickIds: ['gclid' => 'abc'],
-        );
+        $touchpoint = $this->touchpoint(utm: new UtmParameters(medium: 'organic'), clickIds: ['gclid' => 'abc']);
 
         Assert::same($this->resolver->resolve($touchpoint), Channel::Paid);
     }
@@ -42,7 +38,7 @@ final class DefaultChannelResolverTest
     #[DataProvider('mediumProvider')]
     public function classifiesByMedium(string $medium, Channel $expected): void
     {
-        Assert::same($this->resolver->resolve(self::touchpoint(new UtmParameters(medium: $medium))), $expected);
+        Assert::same($this->resolver->resolve($this->touchpoint(new UtmParameters(medium: $medium))), $expected);
     }
 
     public static function mediumProvider(): iterable
@@ -66,18 +62,18 @@ final class DefaultChannelResolverTest
 
     public function unknownMediumWithoutReferrerIsOther(): void
     {
-        Assert::same($this->resolver->resolve(self::touchpoint(new UtmParameters(medium: 'carrier-pigeon'))), Channel::Other);
+        Assert::same($this->resolver->resolve($this->touchpoint(new UtmParameters(medium: 'carrier-pigeon'))), Channel::Other);
     }
 
     public function noCampaignAndNoReferrerIsDirect(): void
     {
-        Assert::same($this->resolver->resolve(self::touchpoint(new UtmParameters())), Channel::Direct);
+        Assert::same($this->resolver->resolve($this->touchpoint(new UtmParameters())), Channel::Direct);
     }
 
     #[DataProvider('referrerProvider')]
     public function classifiesByReferrer(string $referrer, Channel $expected): void
     {
-        $touchpoint = self::touchpoint(new UtmParameters(), referrer: $referrer);
+        $touchpoint = $this->touchpoint(new UtmParameters(), referrer: $referrer);
 
         Assert::same($this->resolver->resolve($touchpoint), $expected);
     }
@@ -99,14 +95,29 @@ final class DefaultChannelResolverTest
     {
         $resolver = new DefaultChannelResolver(paidMediums: ['partner']);
 
-        Assert::same($resolver->resolve(self::touchpoint(new UtmParameters(medium: 'partner'))), Channel::Paid);
-        Assert::same($resolver->resolve(self::touchpoint(new UtmParameters(medium: 'cpc'))), Channel::Other);
+        Assert::same($resolver->resolve($this->touchpoint(new UtmParameters(medium: 'partner'))), Channel::Paid);
+        Assert::same($resolver->resolve($this->touchpoint(new UtmParameters(medium: 'cpc'))), Channel::Other);
+    }
+
+    public function lowercasesMultibyteMediumBeforeMatching(): void
+    {
+        $resolver = new DefaultChannelResolver(paidMediums: ['поиск']);
+
+        Assert::same($resolver->resolve($this->touchpoint(new UtmParameters(medium: 'ПОИСК'))), Channel::Paid);
+        Assert::same($resolver->resolve($this->touchpoint(new UtmParameters(medium: 'cpc'))), Channel::Other);
+    }
+
+    public function referrerSubdomainMatchRequiresADotPrefix(): void
+    {
+        $touchpoint = $this->touchpoint(new UtmParameters(), referrer: 'https://notfacebook.com/x');
+
+        Assert::same($this->resolver->resolve($touchpoint), Channel::Referral);
     }
 
     /**
      * @param array<string, string> $clickIds
      */
-    private static function touchpoint(UtmParameters $utm, array $clickIds = [], ?string $referrer = null): UtmTouchpoint
+    private function touchpoint(UtmParameters $utm, array $clickIds = [], ?string $referrer = null): UtmTouchpoint
     {
         return UtmTouchpoint::of(
             utm: $utm,

@@ -32,7 +32,7 @@ final readonly class UtmParameters
     ) {}
 
     /**
-     * @param array<string, mixed> $data untrusted map with `utm_`-prefixed or bare keys
+     * @param array<array-key, mixed> $data untrusted map with `utm_`-prefixed or bare keys
      */
     public static function fromArray(array $data): self
     {
@@ -84,7 +84,7 @@ final readonly class UtmParameters
     }
 
     /**
-     * @param array<string, mixed> $data
+     * @param array<array-key, mixed> $data
      */
     private static function pick(array $data, string $prefixed, string $bare): mixed
     {

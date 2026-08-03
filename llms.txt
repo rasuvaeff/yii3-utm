@@ -3,8 +3,10 @@
 UTM capture and marketing attribution for Yii3. Namespace `Rasuvaeff\Yii3Utm`.
 PHP 8.3–8.5, requires `ext-json` and `ext-mbstring`.
 
-Status: domain layer implemented. Capture middleware, attribution service and
-the `rasuvaeff/yii3-utm-db` storage adapter are not released yet.
+Status: the core is feature-complete (domain, attribution, capture, config).
+The `rasuvaeff/yii3-utm-db` storage adapter is not released yet — until then the
+application implements `UtmAttributionRepository` or uses the shipped in-memory
+reference implementation.
 
 ## Install
 
@@ -91,10 +93,15 @@ $referrer = Referrer::of('https://ads.example.com/landing');  // ?Referrer
 $referrer->url; $referrer->host;                              // host lowercased
 $referrer->isInternal('shop.example.com'): bool;
 $referrer->equals(Referrer $other): bool;
+
+Referrer::external($sanitizedUrl, $currentHost): ?Referrer;   // null if internal
 ```
 
 Takes an **already sanitised** absolute URL; returns `null` for relative URLs,
-empty input or a URL longer than 500 characters.
+empty input or a URL longer than 500 characters. All three capture sources
+call `Referrer::external()`, not `Referrer::of()`: a referrer from the current
+site itself (same host as the request) is navigation, not a touchpoint to
+attribute the visit to.
 
 ### UtmTouchpoint
 
@@ -186,6 +193,167 @@ interface LandingPageSanitizer
 }
 ```
 
-Implemented by the capture layer; reduces landing pages and referrers to what
-is safe to store (tokens and e-mail addresses routinely travel in query
-strings).
+`DefaultLandingPageSanitizer` is the shipped implementation: it keeps scheme,
+host, port and path, drops the fragment and every query parameter outside its
+allow-list (`utm_*` and click ids by default), and truncates to 500 characters.
+Non-http(s) schemes and relative URLs sanitise to an empty string.
+
+### UtmAttribution
+
+Immutable command. `fingerprint` and `dedupeKey` are computed in the
+constructor and cannot be supplied.
+
+```php
+use Rasuvaeff\Yii3Utm\UtmAttribution;
+
+$attribution = new UtmAttribution(
+    entityId: 'user-42',        // non-empty, <= 191 bytes, application-owned
+    eventId: 'order-7',         // idempotency key, same constraints
+    interactionType: InteractionType::purchase(),
+    touchpoint: $touchpoint,
+);
+
+$attribution->fingerprint;  // sha256 of entity + type + campaign + click ids + landing page + referrer host
+$attribution->dedupeKey;    // sha256(eventId . "\0" . fingerprint)
+```
+
+Invalid identifiers throw `Exception\InvalidUtmValue` (extends
+`InvalidArgumentException`, implements `Exception\UtmException`). `occurredAt`
+does not affect either hash.
+
+### UtmAttributionRepository
+
+Storage contract. Not bound by the core — implemented by
+`rasuvaeff/yii3-utm-db` or by the application.
+
+```php
+public function append(UtmAttribution $attribution): bool;                  // false when the dedupe key existed
+public function findByEntity(string $entityId, ?InteractionType $type = null, int $limit = 100, int $offset = 0): array;
+public function findFirst(string $entityId, ?InteractionType $type = null): ?UtmAttributionRecord;
+public function findLast(string $entityId, ?InteractionType $type = null): ?UtmAttributionRecord;
+public function countByEntity(string $entityId, ?InteractionType $type = null): int;
+public function deleteByEntity(string $entityId): int;                      // personal-data erasure
+public function purgeOlderThan(DateTimeImmutable $before): int;             // retention
+public function countOlderThan(DateTimeImmutable $before): int;             // what purgeOlderThan() would remove, for a dry run
+```
+
+`append()` must be race-safe (upsert-do-nothing, or insert with duplicate-key
+handling). Reads return records in canonical order — `recordedAt`, then `id` —
+both assigned by the server.
+
+`UtmAttributionRecord`: `id(): string`, `attribution(): UtmAttribution`,
+`recordedAt(): DateTimeImmutable`.
+
+`InMemoryUtmAttributionRepository(ClockInterface $clock)` is a shipped
+reference implementation for tests, returning `InMemoryUtmAttributionRecord`
+instances. It is never bound in the container.
+
+### UtmAttributionService
+
+```php
+use Rasuvaeff\Yii3Utm\{UtmAttributionEvent, UtmAttributionService, UtmSimilarity};
+
+$service = new UtmAttributionService(
+    repository: $repository,
+    similarity: UtmSimilarity::Full,   // how history is collapsed
+    maxTouchpoints: 5,
+);
+
+$created = $service->record(new UtmAttributionEvent(
+    entityId: 'user-42',
+    eventId: 'order-7',
+    interactionType: InteractionType::purchase(),
+    history: $history,
+));
+```
+
+Collapses history by similarity, caps it, writes oldest touchpoint first, one
+row per surviving touchpoint, and returns how many rows were created. Empty
+touchpoints are skipped. No transaction wraps the batch: per-touchpoint
+deduplication makes a partial write self-healing on redelivery.
+
+`UtmAttributionEventHandler(UtmAttributionService $service)` is an `__invoke`
+listener. The package never subscribes it — wiring is the application's job.
+
+### Capture stack
+
+```php
+use Rasuvaeff\Yii3Utm\{BodyUtmSource, CookieUtmHistoryStore, HeaderUtmSource,
+    NullUtmHistoryStore, QueryUtmSource, UtmCaptureMiddleware, UtmCookieCodec};
+
+$middleware = new UtmCaptureMiddleware(
+    sources: [new QueryUtmSource($clock, $sanitizer)],   // first non-null wins
+    store: new CookieUtmHistoryStore(codec: new UtmCookieCodec(), clock: $clock),
+    clock: $clock,
+    consentPolicy: new AllowAllConsentPolicy(),
+    similarity: UtmSimilarity::Full,
+    ignoredPaths: [],
+    maxTouchpoints: 5,
+    maxTouchpointAge: UtmCaptureMiddleware::DEFAULT_MAX_TOUCHPOINT_AGE,  // 90 days
+    enabled: true,
+    updateExisting: false,
+    captureOrganic: false,
+    clearHistoryWithoutConsent: false,
+);
+```
+
+Request attributes (always set, `UtmAttributes::CURRENT|HISTORY|EFFECTIVE`):
+
+```php
+use Rasuvaeff\Yii3Utm\UtmRequest;
+
+UtmRequest::current($request);    // ?UtmTouchpoint
+UtmRequest::history($request);    // UtmHistory, possibly empty
+UtmRequest::effective($request);  // ?UtmTouchpoint — current ?? history->latest()
+```
+
+Sources: `QueryUtmSource` (query string + landing page + `Referer`),
+`HeaderUtmSource` (`X-Utm-Source` … `X-Utm-Id`, `X-Utm-Click-Ids`,
+`X-Utm-Landing-Page`, `X-Utm-Referrer`, `X-Utm-Occurred-At`), `BodyUtmSource`
+(nested `utm` key only — a flat body would turn unrelated form fields into
+attribution data). Implement `UtmSource::extract()` for anything else.
+
+`X-Utm-Click-Ids` is a JSON object, for example
+`{"gclid":"...","fbclid":"..."}`. Invalid JSON degrades to empty click
+ids. Query UTM/click-id keys, header prefix, body key and allowed click-id
+subsets are constructor arguments and config-plugin params.
+
+Stores: `CookieUtmHistoryStore` — one cookie for the whole history, `HttpOnly`
+`Secure` `SameSite=Lax` for 30 days by default; `NullUtmHistoryStore` — stores
+nothing, keeps responses cacheable. `read()`, `write()`, `forget()`.
+
+`UtmCookieCodec` — `{"v":1,"t":[…]}`, `at` as a Unix timestamp. Decoding never
+throws: a foreign version, malformed JSON, an oversized value or a broken entry
+yields an empty history. Encoding drops the oldest touchpoints until the value
+fits `maxLength` (3500 bytes by default).
+
+`TouchpointTime` (internal) parses a claimed timestamp — Unix or any format
+`DateTimeImmutable` accepts, falling back to the clock — and clamps it into
+`[now - maxTouchpointAge, now]`. Clamping bounds retention; it authenticates
+nothing.
+
+### Consent
+
+```php
+interface ConsentPolicy
+{
+    public function allowsPersistence(ServerRequestInterface $request): bool;
+}
+```
+
+`AllowAllConsentPolicy` (default) and `CallbackConsentPolicy`. Without consent
+the middleware reads nothing, writes nothing, and still sets empty attributes.
+The method name matches `rasuvaeff/yii3-ab-testing-web` on purpose.
+
+### Configuration
+
+`config/di.php` binds the codec, `LandingPageSanitizer`, `ChannelResolver`,
+`ConsentPolicy`, `UtmHistoryStore`, `UtmCaptureMiddleware`,
+`UtmAttributionService` and `UtmAttributionEventHandler`. It does **not** bind
+`UtmAttributionRepository` — exactly one source may, or `yiisoft/config` throws
+`Duplicate key`. It subscribes no events either.
+
+`config/params.php` → `rasuvaeff/yii3-utm` with `capture`, `sanitizer`,
+`channel`, `cookie` and `attribution` sections. `capture.sources` configures
+query keys, click-id subsets, header prefix and body key; `sanitizer` configures
+the query allow-list/limit; `channel` configures resolver vocabularies.

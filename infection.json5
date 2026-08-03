@@ -8,7 +8,33 @@
         "summary": "build/infection-summary.log"
     },
     "testFramework": "testo",
-    "minMsi": 85,
+    // Achieved Covered Code MSI 96.11% (469/488). The floor stays at 96. The
+    // 17 remaining escapees are true equivalents — verified one by one, not
+    // coverage gaps (Infection also reported one errored and one timed-out
+    // mutant, neither of which survived as normal behavior):
+    //   - ReturnRemoval early-exits whose fall-through reaches the same return
+    //     via the next guard (BodyUtmSource:47, DefaultLandingPageSanitizer:43
+    //     and :78, HeaderUtmSource:66, UtmCookieCodec:71,
+    //     UtmParameters:103).
+    //   - CastInt in InMemoryUtmAttributionRepository:122 (two operands) — the
+    //     id column is a numeric string, and PHP's <=> coerces operands, so
+    //     dropping either cast yields the same ordering.
+    //   - MBString on URL scheme (DefaultLandingPageSanitizer:52) — RFC schemes
+    //     are ASCII-only, so mb_strtolower and strtolower agree.
+    //   - BitwiseOr on ClickIds JSON flags (ClickIds:134) — the value pattern
+    //     forbids '/', so UNESCAPED_SLASHES is a no-op on real input.
+    //   - ConcatOperandRemoval in HeaderUtmSource:40 — UtmParameters::pick
+    //     accepts the bare key as a fallback, so the campaign tuple is the same.
+    //   - UnwrapArrayIntersectKey in QueryUtmSource:49 — UtmParameters ignores
+    //     unrelated query keys, while click ids are filtered independently.
+    //   - UnwrapArrayValues in UtmHistory:34 — `...$touchpoints` always yields
+    //     a 0-indexed list, so array_values is a no-op.
+    //   - TouchpointTime boundaries (:44, :50) — at occurredAt === now and
+    //     occurredAt === earliest both branches return the same value.
+    //   - NullSafePropertyCall (UtmCookieCodec:110, UtmFingerprint:33) — on PHP
+    //     8.5, `null->property` emits E_WARNING and evaluates to null. Testo does
+    //     not promote that warning to failure, so the observed value is equal.
+    "minMsi": 96,
     "mutators": {
         "@default": true
     }

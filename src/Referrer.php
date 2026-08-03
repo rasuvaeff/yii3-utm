@@ -37,7 +37,7 @@ final readonly class Referrer
      */
     public static function of(string $sanitizedUrl): ?self
     {
-        $url = \trim($sanitizedUrl);
+        $url = \trim(\preg_replace('/[\x00-\x1F\x7F]+/u', '', $sanitizedUrl) ?? '');
 
         if ($url === '' || \mb_strlen($url) > self::MAX_URL_LENGTH) {
             return null;
@@ -45,7 +45,7 @@ final readonly class Referrer
 
         $host = \parse_url($url, PHP_URL_HOST);
 
-        if (!\is_string($host) || $host === '' || \strlen($host) > self::MAX_HOST_LENGTH) {
+        if (!\is_string($host) || $host === '' || \mb_strlen($host) > self::MAX_HOST_LENGTH) {
             return null;
         }
 
@@ -55,6 +55,24 @@ final readonly class Referrer
     public function isInternal(string $currentHost): bool
     {
         return $this->host === \mb_strtolower(\trim($currentHost));
+    }
+
+    /**
+     * Same as {@see self::of()}, but returns null for a referrer internal to
+     * `$currentHost` — a visit from one page of the current site to another
+     * is not a touchpoint to attribute the visit to.
+     *
+     * @param string $sanitizedUrl absolute URL already passed through a sanitizer
+     */
+    public static function external(string $sanitizedUrl, string $currentHost): ?self
+    {
+        $referrer = self::of($sanitizedUrl);
+
+        if (!$referrer instanceof self || $referrer->isInternal($currentHost)) {
+            return null;
+        }
+
+        return $referrer;
     }
 
     public function equals(self $other): bool

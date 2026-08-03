@@ -34,7 +34,7 @@
         "psr/http-message": "^2.0",
         "psr/http-server-handler": "^1.0",
         "psr/http-server-middleware": "^1.0",
-        "yiisoft/cookies": "^1.2"
+        "yiisoft/cookies": "^1.2.3"
     },
     "require-dev": {
         "ergebnis/composer-normalize": "^2.51",
@@ -48,6 +48,7 @@
         "testo/bridge-infection": "^0.1.6",
         "testo/testo": "^0.10.25",
         "vimeo/psalm": "^6.16",
+        "yiisoft/di": "^1.2.1",
         "yiisoft/test-support": "^3.0"
     },
     "autoload": {

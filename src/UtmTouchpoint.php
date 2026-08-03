@@ -52,7 +52,7 @@ final readonly class UtmTouchpoint
     {
         return $this->utm->isEmpty()
             && $this->clickIds->isEmpty()
-            && $this->referrer === null;
+            && !$this->referrer instanceof Referrer;
     }
 
     public function withOccurredAt(\DateTimeImmutable $occurredAt): self
@@ -72,7 +72,7 @@ final readonly class UtmTouchpoint
             return null;
         }
 
-        $clean = \trim($landingPage);
+        $clean = \trim(\preg_replace('/[\x00-\x1F\x7F]+/u', '', $landingPage) ?? '');
 
         if ($clean === '') {
             return null;

@@ -81,7 +81,7 @@ final readonly class DefaultChannelResolver implements ChannelResolver
 
         $referrer = $touchpoint->referrer;
 
-        if ($referrer === null) {
+        if (!$referrer instanceof Referrer) {
             return $touchpoint->utm->isEmpty() ? Channel::Direct : Channel::Other;
         }
 

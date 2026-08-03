@@ -33,6 +33,18 @@ final class ReferrerTest
         Assert::same(Referrer::of('  https://example.com/x  ')?->url, 'https://example.com/x');
     }
 
+    public function stripsControlCharsFromTheUrl(): void
+    {
+        Assert::same(Referrer::of("https://example.com/path\x01injected\x7F")?->url, 'https://example.com/pathinjected');
+    }
+
+    public function acceptsAMultibyteHostWhoseByteLengthExceedsTheLimitButWhoseCharacterLengthDoesNot(): void
+    {
+        $url = 'https://' . \str_repeat('а', 242) . '.example/x';
+
+        Assert::instanceOf(Referrer::of($url), Referrer::class);
+    }
+
     #[DataProvider('rejectedUrlsProvider')]
     public function rejectsUnusableUrls(string $url): void
     {
@@ -50,6 +62,42 @@ final class ReferrerTest
         yield 'no host' => ['https://'];
 
         yield 'too long' => ['https://example.com/' . \str_repeat('a', Referrer::MAX_URL_LENGTH)];
+
+        yield 'host too long' => ['https://' . \str_repeat('a', Referrer::MAX_HOST_LENGTH + 1) . '.com/x'];
+    }
+
+    public function acceptsAUrlAtTheMaximumLength(): void
+    {
+        $url = 'https://example.com/' . \str_repeat('a', Referrer::MAX_URL_LENGTH - 20);
+
+        Assert::same(\mb_strlen(Referrer::of($url)?->url ?? ''), Referrer::MAX_URL_LENGTH);
+    }
+
+    public function acceptsAMultibyteUrlWhoseByteLengthExceedsTheLimit(): void
+    {
+        $url = 'https://x.example/' . \str_repeat('а', 242);
+
+        Assert::instanceOf(Referrer::of($url), Referrer::class);
+    }
+
+    public function acceptsAHostAtTheMaximumLength(): void
+    {
+        $url = 'https://' . \str_repeat('a', Referrer::MAX_HOST_LENGTH) . '/x';
+
+        Assert::instanceOf(Referrer::of($url), Referrer::class);
+    }
+
+    public function lowercasesMultibyteHost(): void
+    {
+        Assert::same(Referrer::of('https://МОСКВА.РФ/x')?->host, 'москва.рф');
+    }
+
+    public function detectsInternalReferrerForMultibyteHost(): void
+    {
+        $referrer = Referrer::of('https://москва.рф/x');
+
+        Assert::true($referrer?->isInternal('МОСКВА.РФ'));
+        Assert::false($referrer?->isInternal('example.com'));
     }
 
     public function detectsInternalReferrer(): void
@@ -59,6 +107,25 @@ final class ReferrerTest
         Assert::true($referrer?->isInternal('shop.example.com'));
         Assert::true($referrer?->isInternal(' Shop.Example.com '));
         Assert::false($referrer?->isInternal('ads.example.com'));
+    }
+
+    public function externalReturnsNullForAnInternalReferrer(): void
+    {
+        Assert::null(Referrer::external('https://shop.example.com/cart', 'shop.example.com'));
+        Assert::null(Referrer::external('https://shop.example.com/cart', ' Shop.Example.com '));
+    }
+
+    public function externalReturnsTheReferrerWhenItIsNotInternal(): void
+    {
+        $referrer = Referrer::external('https://ads.example.com/landing', 'shop.example.com');
+
+        Assert::instanceOf($referrer, Referrer::class);
+        Assert::same($referrer->host, 'ads.example.com');
+    }
+
+    public function externalReturnsNullForAnUnusableUrl(): void
+    {
+        Assert::null(Referrer::external('', 'shop.example.com'));
     }
 
     public function equalsComparesUrl(): void

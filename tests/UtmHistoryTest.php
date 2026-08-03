@@ -33,9 +33,9 @@ final class UtmHistoryTest
     public function sortsNewestFirst(): void
     {
         $history = UtmHistory::of(
-            self::touchpoint('older', '2026-07-01 10:00:00'),
-            self::touchpoint('newer', '2026-08-01 10:00:00'),
-            self::touchpoint('middle', '2026-07-15 10:00:00'),
+            $this->touchpoint('older', '2026-07-01 10:00:00'),
+            $this->touchpoint('newer', '2026-08-01 10:00:00'),
+            $this->touchpoint('middle', '2026-07-15 10:00:00'),
         );
 
         Assert::same(\array_map(static fn(UtmTouchpoint $t): ?string => $t->utm->source, $history->all()), ['newer', 'middle', 'older']);
@@ -45,16 +45,26 @@ final class UtmHistoryTest
 
     public function withKeepsOrdering(): void
     {
-        $history = UtmHistory::of(self::touchpoint('a', '2026-07-01 10:00:00'))
-            ->with(self::touchpoint('b', '2026-08-01 10:00:00'));
+        $history = UtmHistory::of($this->touchpoint('a', '2026-07-01 10:00:00'))
+            ->with($this->touchpoint('b', '2026-08-01 10:00:00'));
 
         Assert::same($history->count(), 2);
         Assert::same($history->latest()?->utm->source, 'b');
     }
 
+    public function withKeepsAllPriorTouchpoints(): void
+    {
+        $history = UtmHistory::of(
+            $this->touchpoint('a', '2026-06-01 10:00:00'),
+            $this->touchpoint('b', '2026-07-01 10:00:00'),
+        )->with($this->touchpoint('c', '2026-08-01 10:00:00'));
+
+        Assert::same($history->count(), 3);
+    }
+
     public function isIterable(): void
     {
-        $history = UtmHistory::of(self::touchpoint('a', '2026-07-01 10:00:00'));
+        $history = UtmHistory::of($this->touchpoint('a', '2026-07-01 10:00:00'));
 
         Assert::same(\iterator_to_array($history->getIterator()), $history->all());
     }
@@ -62,9 +72,9 @@ final class UtmHistoryTest
     public function limitedKeepsNewest(): void
     {
         $history = UtmHistory::of(
-            self::touchpoint('a', '2026-06-01 10:00:00'),
-            self::touchpoint('b', '2026-07-01 10:00:00'),
-            self::touchpoint('c', '2026-08-01 10:00:00'),
+            $this->touchpoint('a', '2026-06-01 10:00:00'),
+            $this->touchpoint('b', '2026-07-01 10:00:00'),
+            $this->touchpoint('c', '2026-08-01 10:00:00'),
         )->limited(2);
 
         Assert::same(\array_map(static fn(UtmTouchpoint $t): ?string => $t->utm->source, $history->all()), ['c', 'b']);
@@ -72,17 +82,27 @@ final class UtmHistoryTest
 
     public function limitedIsANoOpWhenSmallEnough(): void
     {
-        $history = UtmHistory::of(self::touchpoint('a', '2026-06-01 10:00:00'));
+        $history = UtmHistory::of($this->touchpoint('a', '2026-06-01 10:00:00'));
 
         Assert::same($history->limited(5)->count(), 1);
+    }
+
+    public function limitedReturnsTheSameInstanceAtTheBoundary(): void
+    {
+        $history = UtmHistory::of(
+            $this->touchpoint('a', '2026-06-01 10:00:00'),
+            $this->touchpoint('b', '2026-07-01 10:00:00'),
+        );
+
+        Assert::same($history->limited(2), $history);
     }
 
     public function deduplicatedKeepsTheOldestOfEachGroup(): void
     {
         $history = UtmHistory::of(
-            self::touchpoint('google', '2026-06-01 10:00:00', 'cpc', 'first'),
-            self::touchpoint('google', '2026-07-01 10:00:00', 'cpc', 'second'),
-            self::touchpoint('bing', '2026-08-01 10:00:00', 'cpc', 'other'),
+            $this->touchpoint('google', '2026-06-01 10:00:00', 'cpc', 'first'),
+            $this->touchpoint('google', '2026-07-01 10:00:00', 'cpc', 'second'),
+            $this->touchpoint('bing', '2026-08-01 10:00:00', 'cpc', 'other'),
         )->deduplicated(UtmSimilarity::SourceMedium);
 
         Assert::same($history->count(), 2);
@@ -92,8 +112,8 @@ final class UtmHistoryTest
     public function deduplicatedKeepsDistinctTouchpoints(): void
     {
         $history = UtmHistory::of(
-            self::touchpoint('google', '2026-06-01 10:00:00'),
-            self::touchpoint('bing', '2026-07-01 10:00:00'),
+            $this->touchpoint('google', '2026-06-01 10:00:00'),
+            $this->touchpoint('bing', '2026-07-01 10:00:00'),
         )->deduplicated(UtmSimilarity::Full);
 
         Assert::same($history->count(), 2);
@@ -102,7 +122,7 @@ final class UtmHistoryTest
     #[Property(runs: 200)]
     public function limitedNeverExceedsTheCap(array $offsets, int $max): void
     {
-        Assert::true(self::historyOf($offsets)->limited($max)->count() <= $max);
+        Assert::true($this->historyOf($offsets)->limited($max)->count() <= $max);
     }
 
     /**
@@ -119,10 +139,10 @@ final class UtmHistoryTest
     #[Property(runs: 200)]
     public function orderingIsIndependentOfInputOrder(array $offsets): void
     {
-        $direct = self::historyOf($offsets);
-        $reversed = self::historyOf(\array_reverse($offsets));
+        $direct = $this->historyOf($offsets);
+        $reversed = $this->historyOf(\array_reverse($offsets));
 
-        Assert::same(self::sources($reversed), self::sources($direct));
+        Assert::same($this->sources($reversed), $this->sources($direct));
     }
 
     /**
@@ -136,10 +156,10 @@ final class UtmHistoryTest
     #[Property(runs: 200)]
     public function deduplicationIsIndependentOfInputOrder(array $offsets, UtmSimilarity $similarity): void
     {
-        $direct = self::historyOf($offsets)->deduplicated($similarity);
-        $reversed = self::historyOf(\array_reverse($offsets))->deduplicated($similarity);
+        $direct = $this->historyOf($offsets)->deduplicated($similarity);
+        $reversed = $this->historyOf(\array_reverse($offsets))->deduplicated($similarity);
 
-        Assert::same(self::sources($reversed), self::sources($direct));
+        Assert::same($this->sources($reversed), $this->sources($direct));
     }
 
     /**
@@ -156,17 +176,12 @@ final class UtmHistoryTest
     /**
      * @param list<int> $offsets
      */
-    private static function historyOf(array $offsets): UtmHistory
+    private function historyOf(array $offsets): UtmHistory
     {
         $touchpoints = [];
 
         foreach ($offsets as $offset) {
-            $touchpoints[] = self::touchpoint(
-                source: 'src-' . ($offset % 3),
-                time: \sprintf('2026-06-%02d 10:00:00', ($offset % 27) + 1),
-                medium: 'cpc',
-                campaign: 'camp-' . ($offset % 2),
-            );
+            $touchpoints[] = $this->touchpoint(source: 'src-' . ($offset % 3), time: \sprintf('2026-06-%02d 10:00:00', ($offset % 27) + 1), medium: 'cpc', campaign: 'camp-' . ($offset % 2));
         }
 
         return UtmHistory::of(...$touchpoints);
@@ -175,15 +190,15 @@ final class UtmHistoryTest
     /**
      * @return list<string>
      */
-    private static function sources(UtmHistory $history): array
+    private function sources(UtmHistory $history): array
     {
         return \array_map(
-            static fn(UtmTouchpoint $t): string => $t->occurredAt->format('Y-m-d') . '|' . (string) $t->utm->source . '|' . (string) $t->utm->campaign,
+            static fn(UtmTouchpoint $t): string => $t->occurredAt->format('Y-m-d') . '|' . $t->utm->source . '|' . $t->utm->campaign,
             $history->all(),
         );
     }
 
-    private static function touchpoint(string $source, string $time, ?string $medium = null, ?string $campaign = null): UtmTouchpoint
+    private function touchpoint(string $source, string $time, ?string $medium = null, ?string $campaign = null): UtmTouchpoint
     {
         return UtmTouchpoint::of(
             utm: new UtmParameters(source: $source, medium: $medium, campaign: $campaign),

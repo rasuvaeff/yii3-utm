@@ -13,9 +13,8 @@ business event into rows of an append-only attribution journal. Namespace
 The core does **not** provide persistence: `UtmAttributionRepository` is
 implemented by `rasuvaeff/yii3-utm-db` or by the application.
 
-Build state: domain layer implemented (campaign tuple, click ids, referrer,
-touchpoint, history, similarity, interaction type, fingerprint, channel
-resolution). Attribution and capture layers are next per the plan.
+Build state: domain, attribution and capture layers are implemented. Portable
+persistence is available in the sibling `rasuvaeff/yii3-utm-db` package.
 
 ## Golden rules
 
