@@ -73,7 +73,7 @@ final readonly class HeaderUtmSource implements UtmSource
             return ClickIds::empty();
         }
 
-        $decoded = \array_intersect_key($decoded, \array_fill_keys($this->clickIdKeys, true));
+        $decoded = \array_intersect_key($decoded, \array_fill_keys($this->clickIdKeys, value: true));
 
         return ClickIds::fromArray($decoded);
     }

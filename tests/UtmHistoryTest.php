@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Rasuvaeff\Yii3Utm\Tests;
 
 use Rasuvaeff\PropertyTesting\ArbitraryInterface;
+use Rasuvaeff\PropertyTesting\Classify;
 use Rasuvaeff\PropertyTesting\Gen;
 use Rasuvaeff\PropertyTesting\Property;
 use Rasuvaeff\Yii3Utm\UtmHistory;
@@ -122,7 +123,27 @@ final class UtmHistoryTest
     #[Property(runs: 200)]
     public function limitedNeverExceedsTheCap(array $offsets, int $max): void
     {
-        Assert::true($this->historyOf($offsets)->limited($max)->count() <= $max);
+        $history = $this->historyOf($offsets);
+
+        // `count() <= $max` is satisfied by any history shorter than the cap
+        // without the cap doing anything. Both sides have to occur for the
+        // property to be about `limited()` at all.
+        Classify::cover($history->count() > $max, 'the cap actually binds', 15.0);
+        Classify::cover($history->count() <= $max, 'the history is already short enough', 25.0);
+        Classify::when($max === 0, 'a cap of zero');
+
+        Assert::true($history->limited($max)->count() <= $max);
+    }
+
+    /**
+     * @return iterable<string, array{list<int>, int}>
+     */
+    public static function limitedNeverExceedsTheCapExamples(): iterable
+    {
+        yield 'empty history, zero cap' => [[], 0];
+        yield 'one touchpoint, zero cap' => [[0], 0];
+        yield 'exactly at the cap' => [[0, 1, 2], 3];
+        yield 'one over the cap' => [[0, 1, 2, 3], 3];
     }
 
     /**

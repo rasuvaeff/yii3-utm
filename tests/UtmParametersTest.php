@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Rasuvaeff\Yii3Utm\Tests;
 
 use Rasuvaeff\PropertyTesting\ArbitraryInterface;
+use Rasuvaeff\PropertyTesting\Classify;
 use Rasuvaeff\PropertyTesting\Gen;
 use Rasuvaeff\PropertyTesting\Property;
 use Rasuvaeff\Yii3Utm\UtmParameters;
@@ -166,7 +167,30 @@ final class UtmParametersTest
             'utm_id' => $id,
         ]);
 
+        $kept = \array_filter($utm->toArray(), static fn(?string $value): bool => $value !== null);
+
+        // An all-empty input round-trips through any implementation, including
+        // one that dropped every field, so the runs that carry a value are the
+        // ones worth a floor. The empty case is labelled rather than gated:
+        // six independently nullable fields all coming back empty is ~1.5% of
+        // draws, too close to zero over 200 runs to gate honestly — it is
+        // pinned as an example instead, where it runs on every seed.
+        Classify::cover($kept !== [], 'at least one parameter kept', 50.0);
+        Classify::when($kept === [], 'nothing survived normalisation');
+
         Assert::same(UtmParameters::fromArray($utm->toArray())->toArray(), $utm->toArray());
+    }
+
+    /**
+     * @return iterable<string, array{?string, ?string, ?string, ?string, ?string, ?string}>
+     */
+    public static function roundTripsThroughAnArrayExamples(): iterable
+    {
+        yield 'nothing set at all' => [null, null, null, null, null, null];
+        yield 'empty strings everywhere' => ['', '', '', '', '', ''];
+        yield 'only the source' => ['newsletter', null, null, null, null, null];
+        yield 'only the id' => [null, null, null, null, null, 'abc123'];
+        yield 'whitespace that normalises away' => ['   ', null, null, null, null, null];
     }
 
     /**
