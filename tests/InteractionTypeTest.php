@@ -37,7 +37,7 @@ final class InteractionTypeTest
             return;
         }
 
-        Assert::true(false);
+        Assert::true(actual: false);
     }
 
     public static function invalidValuesProvider(): iterable

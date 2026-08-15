@@ -46,8 +46,8 @@ final readonly class QueryUtmSource implements UtmSource
     public function extract(ServerRequestInterface $request): ?UtmTouchpoint
     {
         $query = $request->getQueryParams();
-        $utm = \array_intersect_key($query, \array_fill_keys($this->utmKeys, true));
-        $clickIds = \array_intersect_key($query, \array_fill_keys($this->clickIdKeys, true));
+        $utm = \array_intersect_key($query, \array_fill_keys($this->utmKeys, value: true));
+        $clickIds = \array_intersect_key($query, \array_fill_keys($this->clickIdKeys, value: true));
 
         $touchpoint = UtmTouchpoint::of(
             utm: UtmParameters::fromArray($utm),

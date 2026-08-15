@@ -98,15 +98,15 @@ final readonly class DefaultChannelResolver implements ChannelResolver
 
     private function fromMedium(string $medium): ?Channel
     {
-        if (\in_array($medium, $this->paidMediums, true)) {
+        if (\in_array($medium, $this->paidMediums, strict: true)) {
             return Channel::Paid;
         }
 
-        if (\in_array($medium, $this->emailMediums, true)) {
+        if (\in_array($medium, $this->emailMediums, strict: true)) {
             return Channel::Email;
         }
 
-        if (\in_array($medium, $this->socialMediums, true)) {
+        if (\in_array($medium, $this->socialMediums, strict: true)) {
             return Channel::Social;
         }
 

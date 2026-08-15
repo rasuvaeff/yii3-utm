@@ -74,7 +74,7 @@ final readonly class BodyUtmSource implements UtmSource
             return ClickIds::empty();
         }
 
-        return ClickIds::fromArray(\array_intersect_key($value, \array_fill_keys($this->clickIdKeys, true)));
+        return ClickIds::fromArray(\array_intersect_key($value, \array_fill_keys($this->clickIdKeys, value: true)));
     }
 
     private function timeValue(mixed $value): ?string

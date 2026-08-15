@@ -115,8 +115,8 @@ final class ConfigWiringTest
             ],
         );
         Assert::same(\array_keys($params['capture']['sources']), ['query', 'header', 'body']);
-        Assert::same($params['cookie']['httpOnly'], true);
-        Assert::same($params['cookie']['secure'], true);
+        Assert::same($params['cookie']['httpOnly'], expected: true);
+        Assert::same($params['cookie']['secure'], expected: true);
     }
 
     public function configurableServicesUseParams(): void
