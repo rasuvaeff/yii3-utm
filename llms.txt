@@ -98,7 +98,10 @@ Referrer::external($sanitizedUrl, $currentHost): ?Referrer;   // null if interna
 ```
 
 Takes an **already sanitised** absolute URL; returns `null` for relative URLs,
-empty input or a URL longer than 500 characters. All three capture sources
+empty input, a URL longer than 500 characters, or any scheme other than `http`
+and `https` — `javascript:`, `data:` and `file:` are rejected here rather than
+in the capture layer, because this factory is also the gate a cookie and a
+stored row pass through. All three capture sources
 call `Referrer::external()`, not `Referrer::of()`: a referrer from the current
 site itself (same host as the request) is navigation, not a touchpoint to
 attribute the visit to.
@@ -324,13 +327,19 @@ nothing, keeps responses cacheable. `read()`, `write()`, `forget()`.
 
 `UtmCookieCodec` — `{"v":1,"t":[…]}`, `at` as a Unix timestamp. Decoding never
 throws: a foreign version, malformed JSON, an oversized value or a broken entry
-yields an empty history. Encoding drops the oldest touchpoints until the value
-fits `maxLength` (3500 bytes by default).
+yields an empty history. Decoding also re-sanitises `r` and `lp` through a
+`LandingPageSanitizer` (constructor argument, second): a cookie is exactly as
+untrusted as a query string. Encoding drops the oldest touchpoints until
+`strlen(urlencode($value))` fits `maxLength` (3500 by default) — the budget is
+spent on the percent-encoded value, because that is what `Set-Cookie` carries
+and what the 4096-byte browser limit applies to.
 
 `TouchpointTime` (internal) parses a claimed timestamp — Unix or any format
-`DateTimeImmutable` accepts, falling back to the clock — and clamps it into
-`[now - maxTouchpointAge, now]`. Clamping bounds retention; it authenticates
-nothing.
+`DateTimeImmutable` accepts, falling back to the clock. `withinWindow()` caps a
+future claim to `now` and returns `null` for a claim older than
+`maxTouchpointAge`; the middleware drops such a touchpoint from the history and
+rewrites the cookie. Moving a stale claim to the window boundary instead would
+invent a timestamp and keep the touchpoint alive forever.
 
 ### Consent
 

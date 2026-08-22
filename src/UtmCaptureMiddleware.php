@@ -36,7 +36,8 @@ final readonly class UtmCaptureMiddleware implements MiddlewareInterface
      * @param list<UtmSource> $sources in priority order; the first non-null result wins
      * @param list<string> $ignoredPaths request paths to skip, matched by prefix
      * @param int<1, max> $maxTouchpoints
-     * @param int<0, max> $maxTouchpointAge how old a claimed moment may be, in seconds
+     * @param int<0, max> $maxTouchpointAge how old a claimed moment may be, in seconds;
+     *        an older claim produces no touchpoint and drops a stored one
      * @param bool $updateExisting whether a touchpoint similar to the newest stored one is appended
      * @param bool $captureOrganic whether a visit with neither campaign nor click id becomes a touchpoint
      * @param bool $clearHistoryWithoutConsent whether a stored history is dropped when consent is absent
@@ -69,13 +70,20 @@ final readonly class UtmCaptureMiddleware implements MiddlewareInterface
             return $this->clearHistoryWithoutConsent ? $this->store->forget($response) : $response;
         }
 
-        $stored = $this->clampStored($this->store->read($request))->limited($this->maxTouchpoints);
+        $read = $this->store->read($request);
+        $stored = $this->withinWindow($read)->limited($this->maxTouchpoints);
         $current = $this->capture($request);
         $history = $this->merge($stored, $current);
 
         $response = $handler->handle($this->withAttributes($request, $current, $history));
 
-        return $history === $stored ? $response : $this->store->write($response, $history);
+        // Compared against what was read, not against the filtered value: a
+        // touchpoint dropped for age leaves `$history === $stored`, and writing
+        // only on that condition would leave the stale entry in the cookie
+        // forever, re-dropped on every request. Every step below returns the
+        // very same object when it changes nothing, so identity here still
+        // means "nothing to persist" and a response stays cacheable.
+        return $history === $read ? $response : $this->store->write($response, $history);
     }
 
     private function capture(ServerRequestInterface $request): ?UtmTouchpoint
@@ -91,32 +99,61 @@ final readonly class UtmCaptureMiddleware implements MiddlewareInterface
                 continue;
             }
 
-            return $touchpoint->withOccurredAt(
-                TouchpointTime::clamp($touchpoint->occurredAt, $this->clock, $this->maxTouchpointAge),
+            $occurredAt = TouchpointTime::withinWindow(
+                $touchpoint->occurredAt,
+                $this->clock,
+                $this->maxTouchpointAge,
             );
+
+            if (!$occurredAt instanceof \DateTimeImmutable) {
+                continue;
+            }
+
+            return $touchpoint->withOccurredAt($occurredAt);
         }
 
         return null;
     }
 
     /**
-     * A stored touchpoint's `occurredAt` was clamped when it was captured, but
+     * A stored touchpoint's `occurredAt` was checked when it was captured, but
      * the store itself does not re-check it: a hand-edited cookie value could
-     * carry a claim far outside the window. Clamping again on every read keeps
-     * that guarantee for values the codec did not just produce.
+     * carry a claim far outside the window. Re-applying the window on every read
+     * keeps that guarantee for values the codec did not just produce.
+     *
+     * Returns the argument unchanged when nothing was dropped or capped, so that
+     * {@see self::process()} can tell "the cookie is already correct" from
+     * "the cookie has to be rewritten" by identity.
      */
-    private function clampStored(UtmHistory $stored): UtmHistory
+    private function withinWindow(UtmHistory $stored): UtmHistory
     {
-        if ($stored->isEmpty()) {
-            return $stored;
+        $kept = [];
+        $changed = false;
+
+        foreach ($stored->all() as $touchpoint) {
+            $occurredAt = TouchpointTime::withinWindow(
+                $touchpoint->occurredAt,
+                $this->clock,
+                $this->maxTouchpointAge,
+            );
+
+            if (!$occurredAt instanceof \DateTimeImmutable) {
+                $changed = true;
+
+                continue;
+            }
+
+            if ($occurredAt === $touchpoint->occurredAt) {
+                $kept[] = $touchpoint;
+
+                continue;
+            }
+
+            $changed = true;
+            $kept[] = $touchpoint->withOccurredAt($occurredAt);
         }
 
-        return UtmHistory::of(...\array_map(
-            fn(UtmTouchpoint $t): UtmTouchpoint => $t->withOccurredAt(
-                TouchpointTime::clamp($t->occurredAt, $this->clock, $this->maxTouchpointAge),
-            ),
-            $stored->all(),
-        ));
+        return $changed ? UtmHistory::of(...$kept) : $stored;
     }
 
     private function merge(UtmHistory $stored, ?UtmTouchpoint $current): UtmHistory

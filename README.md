@@ -190,6 +190,18 @@ definition. `DefaultLandingPageSanitizer` — the shipped implementation — kee
 port and path, drops the fragment and every query parameter outside its
 allow-list (`utm_*` and click ids by default), and truncates to 500 characters.
 
+The cookie is treated as untrusted input on the way **in** as well: the codec
+runs the referrer and the landing page of a decoded entry through the same
+sanitizer, so a hand-edited cookie cannot inject a `javascript:` URL or an
+unsanitised landing page into the history. `Referrer::of()` accepts `http` and
+`https` only. Pass your own sanitizer to `UtmCookieCodec` when you configure a
+custom allow-list — the shipped `config/di.php` already does.
+
+`UtmCookieCodec::$maxLength` (3500 by default) is the size of the
+**percent-encoded** value, which is what `Set-Cookie` carries: the codec drops
+the oldest touchpoints until the encoded value fits, leaving room for the cookie
+name and its attributes inside the 4096-byte browser limit.
+
 `NullUtmHistoryStore` stores nothing — the right choice for
 stateless APIs and cacheable routes, since capture otherwise adds a
 `Set-Cookie` header and makes a response uncacheable.
@@ -202,7 +214,7 @@ stateless APIs and cacheable routes, since capture otherwise adds a
 | `updateExisting` | `false` | Whether a touchpoint similar to the newest stored one is appended |
 | `captureOrganic` | `false` | Whether a visit with neither campaign nor click id becomes a touchpoint |
 | `maxTouchpoints` | `5` | History cap |
-| `maxTouchpointAge` | 90 days | Window a claimed `occurredAt` is clamped into |
+| `maxTouchpointAge` | 90 days | Retention window for a claimed `occurredAt`: a future claim is capped to now, an older one produces no touchpoint and drops a stored one |
 | `clearHistoryWithoutConsent` | `false` | Whether a stored history is expired when consent is absent |
 
 ### Consent
@@ -289,12 +301,13 @@ insert" is not enough.
 
 | Aspect | Behaviour |
 |---|---|
-| Client input | Untrusted: normalised, truncated, invalid values become `null` |
+| Client input | Untrusted: normalised, truncated, invalid values become `null`. Values stay arbitrary text — escaping on output is the consumer's job |
 | `occurredAt` | A claim by the source, never proof of when a visit happened |
 | Ordering | Server-assigned; a late delivery cannot become the first touch |
 | Deduplication | Fingerprint and dedupe key are derived, never accepted from callers |
-| Referrer | Only its host takes part in the fingerprint; sanitising URLs is the capture layer's job |
+| Referrer | `http`/`https` only; only its host takes part in the fingerprint |
 | Landing page | Truncated to 500 characters; query sanitisation is applied before storage |
+| Cookie | Sanitised on decoding exactly like a query string, and its size is budgeted after percent-encoding |
 
 ## Examples
 

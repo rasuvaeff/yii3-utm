@@ -138,6 +138,25 @@ final class ConfigWiringTest
     }
 
     /**
+     * The cookie carries the same untrusted referrer and landing page a query
+     * string does. Wiring the codec with its own default sanitizer would give
+     * an application that configures an allow-list two different ones for the
+     * same data — and the laxer of the two on the path that needs it most.
+     */
+    public function theCookieCodecUsesTheConfiguredSanitizer(): void
+    {
+        $params = $this->params();
+        $params['rasuvaeff/yii3-utm']['sanitizer']['allowedQueryKeys'] = ['keep'];
+
+        $codec = $this->container(params: $params)->get(UtmCookieCodec::class);
+        $decoded = $codec->decode(
+            '{"v":1,"t":[{"s":"google","lp":"https://shop.example.com/a?keep=1&utm_source=google","at":1750000000}]}',
+        );
+
+        Assert::same($decoded->latest()?->landingPage, 'https://shop.example.com/a?keep=1');
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function definitions(?array $params = null): array
