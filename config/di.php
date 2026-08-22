@@ -36,8 +36,15 @@ use Rasuvaeff\Yii3Utm\UtmHistoryStore;
  */
 
 return [
-    UtmCookieCodec::class => static fn (): UtmCookieCodec => new UtmCookieCodec(
+    // The codec takes the container's sanitizer, not its own default: the
+    // cookie carries the same untrusted referrer and landing page a query
+    // string does, and an application that configures a custom allow-list must
+    // not end up with two different ones for the same data.
+    UtmCookieCodec::class => static fn (
+        LandingPageSanitizer $sanitizer,
+    ): UtmCookieCodec => new UtmCookieCodec(
         maxLength: $params['rasuvaeff/yii3-utm']['cookie']['maxLength'],
+        sanitizer: $sanitizer,
     ),
 
     LandingPageSanitizer::class => static fn (): LandingPageSanitizer => new DefaultLandingPageSanitizer(

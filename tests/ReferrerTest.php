@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Rasuvaeff\Yii3Utm\Tests;
 
+use Rasuvaeff\PropertyTesting\ArbitraryInterface;
+use Rasuvaeff\PropertyTesting\Classify;
+use Rasuvaeff\PropertyTesting\Gen;
+use Rasuvaeff\PropertyTesting\Property;
 use Rasuvaeff\Yii3Utm\Referrer;
 use Testo\Assert;
 use Testo\Codecov\Covers;
@@ -61,9 +65,63 @@ final class ReferrerTest
 
         yield 'no host' => ['https://'];
 
+        // `https://` is rejected by the scheme guard already — parse_url()
+        // reports no scheme for it. This one carries a real scheme and still
+        // has no host, which is what keeps the host guard exercised.
+        yield 'scheme without a host' => ['https:/landing'];
+
         yield 'too long' => ['https://example.com/' . \str_repeat('a', Referrer::MAX_URL_LENGTH)];
 
         yield 'host too long' => ['https://' . \str_repeat('a', Referrer::MAX_HOST_LENGTH + 1) . '.com/x'];
+
+        // Every one of these used to be accepted: the factory only asked
+        // parse_url() for a host, and `javascript://evil.example.com/x` has one.
+        yield 'javascript with a host' => ['javascript://evil.example.com/%0aalert(1)'];
+
+        yield 'data' => ['data://evil.example.com/text/html,<script>alert(1)</script>'];
+
+        yield 'file' => ['file://evil.example.com/etc/passwd'];
+
+        yield 'ftp' => ['ftp://evil.example.com/x'];
+
+        yield 'protocol relative' => ['//evil.example.com/x'];
+    }
+
+    public function acceptsHttpAndUppercaseSchemes(): void
+    {
+        Assert::same(Referrer::of('http://example.com/x')?->host, 'example.com');
+        Assert::same(Referrer::of('HTTPS://example.com/x')?->host, 'example.com');
+    }
+
+    /**
+     * An accept/reject property over the scheme alphabet: the generator builds
+     * both allowed and forbidden schemes, so no `Assume` is needed and the
+     * "rejects everything" mutation dies as surely as "accepts everything".
+     * `timeoutMs` guards the regex work inside `parse_url()`.
+     */
+    #[Property(runs: 300, timeoutMs: 1000)]
+    public function acceptsAnUrlExactlyWhenItsSchemeIsHttpOrHttps(string $scheme): void
+    {
+        $allowed = \in_array(\mb_strtolower($scheme), ['http', 'https'], strict: true);
+
+        Classify::cover($allowed, 'http or https', 5.0);
+        Classify::cover(!$allowed, 'some other scheme', 5.0);
+
+        Assert::same(Referrer::of($scheme . '://ads.example.com/x') instanceof Referrer, $allowed);
+    }
+
+    /**
+     * @return array<string, ArbitraryInterface>
+     */
+    public static function acceptsAnUrlExactlyWhenItsSchemeIsHttpOrHttpsGenerators(): array
+    {
+        return [
+            'scheme' => Gen::frequency([
+                [1, Gen::elements(['http', 'https', 'HTTP', 'HttpS'])],
+                [1, Gen::elements(['javascript', 'data', 'file', 'ftp', 'ws', 'chrome-extension'])],
+                [1, Gen::stringMatching('[a-z][a-z0-9]{0,8}')],
+            ]),
+        ];
     }
 
     public function acceptsAUrlAtTheMaximumLength(): void

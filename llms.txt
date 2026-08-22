@@ -18,7 +18,9 @@ composer require rasuvaeff/yii3-utm
 
 1. Everything from the client — query, headers, body, cookies, `localStorage` —
    is untrusted. Values are normalised, truncated or dropped, never
-   authenticated.
+   authenticated. Normalisation is not escaping: a value stays arbitrary text
+   (`utm_source=<img src=x onerror=alert(1)>` survives intact), so escaping at
+   the point of output is the consumer's job.
 2. `occurredAt` is a claim by the source. It never decides ordering; the server
    assigns order when a row is written, so a late delivery cannot become the
    first touch.
@@ -98,7 +100,10 @@ Referrer::external($sanitizedUrl, $currentHost): ?Referrer;   // null if interna
 ```
 
 Takes an **already sanitised** absolute URL; returns `null` for relative URLs,
-empty input or a URL longer than 500 characters. All three capture sources
+empty input, a URL longer than 500 characters, or any scheme other than `http`
+and `https` — `javascript:`, `data:` and `file:` are rejected here rather than
+in the capture layer, because this factory is also the gate a cookie and a
+stored row pass through. All three capture sources
 call `Referrer::external()`, not `Referrer::of()`: a referrer from the current
 site itself (same host as the request) is navigation, not a touchpoint to
 attribute the visit to.
@@ -197,6 +202,12 @@ interface LandingPageSanitizer
 host, port and path, drops the fragment and every query parameter outside its
 allow-list (`utm_*` and click ids by default), and truncates to 500 characters.
 Non-http(s) schemes and relative URLs sanitise to an empty string.
+
+Truncation cuts on a boundary the sanitizer can read back: a whole query pair,
+never inside a percent-triplet, never leaving a dangling `?` or the `:` of a
+port whose digits did not fit. That is what makes
+`sanitize(sanitize($url)) === sanitize($url)` hold — the guarantee only assumes
+`maxLength` still admits `scheme://` plus one character of the host.
 
 ### UtmAttribution
 
@@ -297,6 +308,14 @@ $middleware = new UtmCaptureMiddleware(
 );
 ```
 
+`ignoredPaths` matches on a segment boundary — the path itself or anything
+below it. `/api` skips `/api` and `/api/v1` and leaves `/api-docs` alone.
+
+The cookie is rewritten only when the history changes, which keeps an unchanged
+response cacheable and makes `ttlDays` count from the last touchpoint, not from
+the last visit: a visitor returning daily through a direct link still loses the
+history 30 days after the last campaign touch.
+
 Request attributes (always set, `UtmAttributes::CURRENT|HISTORY|EFFECTIVE`):
 
 ```php
@@ -324,13 +343,19 @@ nothing, keeps responses cacheable. `read()`, `write()`, `forget()`.
 
 `UtmCookieCodec` — `{"v":1,"t":[…]}`, `at` as a Unix timestamp. Decoding never
 throws: a foreign version, malformed JSON, an oversized value or a broken entry
-yields an empty history. Encoding drops the oldest touchpoints until the value
-fits `maxLength` (3500 bytes by default).
+yields an empty history. Decoding also re-sanitises `r` and `lp` through a
+`LandingPageSanitizer` (constructor argument, second): a cookie is exactly as
+untrusted as a query string. Encoding drops the oldest touchpoints until
+`strlen(urlencode($value))` fits `maxLength` (3500 by default) — the budget is
+spent on the percent-encoded value, because that is what `Set-Cookie` carries
+and what the 4096-byte browser limit applies to.
 
 `TouchpointTime` (internal) parses a claimed timestamp — Unix or any format
-`DateTimeImmutable` accepts, falling back to the clock — and clamps it into
-`[now - maxTouchpointAge, now]`. Clamping bounds retention; it authenticates
-nothing.
+`DateTimeImmutable` accepts, falling back to the clock. `withinWindow()` caps a
+future claim to `now` and returns `null` for a claim older than
+`maxTouchpointAge`; the middleware drops such a touchpoint from the history and
+rewrites the cookie. Moving a stale claim to the window boundary instead would
+invent a timestamp and keep the touchpoint alive forever.
 
 ### Consent
 

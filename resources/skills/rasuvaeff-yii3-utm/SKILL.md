@@ -29,8 +29,11 @@ Full API: `vendor/rasuvaeff/yii3-utm/llms.txt`.
 
 2. **Everything the client sends is untrusted, including time.** Query,
    headers, body, cookies and `localStorage` are normalised, truncated or
-   dropped. `occurredAt` is a claim: it is clamped to bound retention, never
-   authenticated, and it never orders anything.
+   dropped — the cookie included: its referrer and landing page go through the
+   same sanitizer a query string does, and `Referrer::of()` accepts `http` and
+   `https` only. `occurredAt` is a claim: a future one is capped to now, one
+   older than `maxTouchpointAge` drops the touchpoint. It authenticates
+   nothing, and it never orders anything.
 
 3. **First touch is server order, not a client flag.** `findFirst()` returns the
    row the server recorded first. There is no `is_first_interaction` column and

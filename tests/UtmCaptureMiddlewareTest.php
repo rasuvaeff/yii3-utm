@@ -9,14 +9,22 @@ use Nyholm\Psr7\ServerRequest;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
+use Rasuvaeff\PropertyTesting\ArbitraryInterface;
+use Rasuvaeff\PropertyTesting\Classify;
+use Rasuvaeff\PropertyTesting\Gen;
+use Rasuvaeff\PropertyTesting\Property;
 use Rasuvaeff\Yii3Utm\CallbackConsentPolicy;
 use Rasuvaeff\Yii3Utm\CookieUtmHistoryStore;
+use Rasuvaeff\Yii3Utm\InMemoryUtmAttributionRepository;
+use Rasuvaeff\Yii3Utm\InteractionType;
 use Rasuvaeff\Yii3Utm\NullUtmHistoryStore;
 use Rasuvaeff\Yii3Utm\QueryUtmSource;
 use Rasuvaeff\Yii3Utm\Referrer;
 use Rasuvaeff\Yii3Utm\Tests\Support\FrozenClock;
 use Rasuvaeff\Yii3Utm\Tests\Support\StaticUtmSource;
 use Rasuvaeff\Yii3Utm\UtmAttributes;
+use Rasuvaeff\Yii3Utm\UtmAttributionEvent;
+use Rasuvaeff\Yii3Utm\UtmAttributionService;
 use Rasuvaeff\Yii3Utm\UtmCaptureMiddleware;
 use Rasuvaeff\Yii3Utm\UtmCookieCodec;
 use Rasuvaeff\Yii3Utm\UtmHistory;
@@ -27,6 +35,7 @@ use Rasuvaeff\Yii3Utm\UtmSimilarity;
 use Rasuvaeff\Yii3Utm\UtmTouchpoint;
 use Testo\Assert;
 use Testo\Codecov\Covers;
+use Testo\Data\DataProvider;
 use Testo\Lifecycle\BeforeTest;
 use Testo\Test;
 
@@ -150,6 +159,68 @@ final class UtmCaptureMiddlewareTest
         Assert::same(UtmRequest::current($this->seenRequest())?->utm->source, 'google');
     }
 
+    public function anEmptyIgnoredPatternDoesNotStopTheScan(): void
+    {
+        $this->handle($this->middleware(ignoredPaths: ['', '/api']), $this->request('/api?utm_source=google'));
+
+        Assert::null(UtmRequest::current($this->seenRequest()));
+    }
+
+    #[DataProvider('ignoredPathBoundaryProvider')]
+    public function matchesAnIgnoredPathOnASegmentBoundary(string $ignored, string $path, bool $skipped): void
+    {
+        $this->handle($this->middleware(ignoredPaths: [$ignored]), $this->request($path . '?utm_source=google'));
+
+        Assert::same(UtmRequest::current($this->seenRequest())?->utm->source, $skipped ? null : 'google');
+    }
+
+    public static function ignoredPathBoundaryProvider(): iterable
+    {
+        yield 'the path itself' => ['/api', '/api', true];
+
+        yield 'a path below it' => ['/api', '/api/v1', true];
+
+        yield 'a sibling sharing the prefix' => ['/api', '/api-docs', false];
+
+        yield 'a longer name sharing the prefix' => ['/health', '/healthz-external', false];
+
+        yield 'a trailing slash still covers the subtree' => ['/api/', '/api/v1', true];
+
+        yield 'the root covers everything' => ['/', '/anything', true];
+    }
+
+    /**
+     * The boundary is the whole point of the comparison: `/api` must cover its
+     * own subtree and nothing that merely starts with those four characters.
+     */
+    #[Property(runs: 100, timeoutMs: 2000)]
+    public function ignoresAPathOnlyOnASegmentBoundary(string $segment, string $suffix): void
+    {
+        $ignored = '/' . $segment;
+        $skipped = $suffix === '' || \str_starts_with($suffix, '/');
+
+        Classify::cover($skipped, 'ignored', 20);
+        Classify::cover(!$skipped, 'captured', 20);
+
+        $this->handle(
+            $this->middleware(ignoredPaths: [$ignored]),
+            $this->request($ignored . $suffix . '?utm_source=google'),
+        );
+
+        Assert::same(UtmRequest::current($this->seenRequest())?->utm->source, $skipped ? null : 'google');
+    }
+
+    /**
+     * @return array<string, ArbitraryInterface>
+     */
+    public static function ignoresAPathOnlyOnASegmentBoundaryGenerators(): array
+    {
+        return [
+            'segment' => Gen::stringFrom('abc', 1, 8),
+            'suffix' => Gen::elements(['', '/', '/v1', '-docs', 'z-external', '_v2', '.json']),
+        ];
+    }
+
     public function captureFallsThroughToTheNextSource(): void
     {
         $middleware = new UtmCaptureMiddleware(
@@ -251,7 +322,7 @@ final class UtmCaptureMiddlewareTest
         Assert::same(UtmRequest::current($this->seenRequest())?->referrer?->host, 'blog.example.org');
     }
 
-    public function clampsAClaimedFutureMoment(): void
+    public function capsAClaimedFutureMoment(): void
     {
         $middleware = new UtmCaptureMiddleware(
             sources: [new StaticUtmSource($this->touchpoint('google', 'cpc', '2030-01-01 00:00:00'))],
@@ -267,7 +338,7 @@ final class UtmCaptureMiddlewareTest
         );
     }
 
-    public function clampsAClaimedAncientMoment(): void
+    public function dropsAClaimedMomentOlderThanTheWindow(): void
     {
         $middleware = new UtmCaptureMiddleware(
             sources: [new StaticUtmSource($this->touchpoint('google', 'cpc', '2000-01-01 00:00:00'))],
@@ -278,35 +349,101 @@ final class UtmCaptureMiddlewareTest
 
         $this->handle($middleware, $this->request('/'));
 
-        Assert::same(
-            UtmRequest::current($this->seenRequest())?->occurredAt->format('Y-m-d H:i:s'),
-            '2026-07-31 12:00:00',
-        );
+        Assert::null(UtmRequest::current($this->seenRequest()));
     }
 
-    public function clampsAStoredTouchpointWithATamperedFutureMoment(): void
+    /**
+     * Sources are tried in priority order, and a stale claim disqualifies one
+     * source, not the rest of the list.
+     */
+    public function fallsThroughToTheNextSourceWhenTheClaimIsTooOld(): void
+    {
+        $middleware = new UtmCaptureMiddleware(
+            sources: [
+                new StaticUtmSource($this->touchpoint('stale', 'cpc', '2000-01-01 00:00:00')),
+                new StaticUtmSource($this->touchpoint('fresh', 'cpc', '2026-08-01 09:00:00')),
+            ],
+            store: new NullUtmHistoryStore(),
+            clock: $this->clock,
+            maxTouchpointAge: 86400,
+        );
+
+        $this->handle($middleware, $this->request('/'));
+
+        Assert::same(UtmRequest::current($this->seenRequest())?->utm->source, 'fresh');
+    }
+
+    public function capsAStoredTouchpointWithATamperedFutureMoment(): void
     {
         $stored = UtmHistory::of($this->touchpoint('google', 'cpc', '2030-01-01 00:00:00'));
         $request = $this->request('/')->withCookieParams(['utm_history' => $this->codec->encode($stored)]);
 
-        $this->handle($this->middleware(), $request);
+        $response = $this->handle($this->middleware(), $request);
 
         Assert::same(
             UtmRequest::history($this->seenRequest())->latest()?->occurredAt->format('Y-m-d H:i:s'),
             '2026-08-01 12:00:00',
         );
+        Assert::same(\count($response->getHeader('Set-Cookie')), 1);
     }
 
-    public function clampsAStoredTouchpointWithATamperedAncientMoment(): void
+    /**
+     * Dropping and rewriting the cookie belong together. Clamping the stored
+     * moment to the window boundary left the touchpoint in the history forever
+     * — it landed back inside the window on every request — and, because the
+     * corrected history equalled the stored one, the corrected value was never
+     * written back either: the same cookie reported a different `occurredAt`
+     * on every day.
+     */
+    public function dropsAStoredTouchpointOlderThanTheWindowAndRewritesTheCookie(): void
     {
-        $stored = UtmHistory::of($this->touchpoint('google', 'cpc', '2000-01-01 00:00:00'));
+        $stored = UtmHistory::of(
+            $this->touchpoint('google', 'cpc', '2000-01-01 00:00:00'),
+            $this->touchpoint('newsletter', 'email', '2026-07-30 10:00:00'),
+        );
         $request = $this->request('/')->withCookieParams(['utm_history' => $this->codec->encode($stored)]);
 
-        $this->handle($this->middleware(), $request);
+        $response = $this->handle($this->middleware(maxTouchpointAge: 86400 * 30), $request);
+        $history = UtmRequest::history($this->seenRequest());
 
+        Assert::same($history->count(), 1);
+        Assert::same($history->latest()?->utm->source, 'newsletter');
+        Assert::same(\count($response->getHeader('Set-Cookie')), 1);
+        Assert::false(\str_contains(\urldecode($response->getHeaderLine('Set-Cookie')), '"google"'));
+    }
+
+    /**
+     * A forged cookie must not be able to put a `javascript:` referrer or an
+     * unsanitised landing page into the attribution journal. The assertion runs
+     * the whole chain a consumer runs: cookie -> middleware -> history ->
+     * `UtmAttributionService` -> repository row.
+     */
+    public function aForgedCookieCannotPutADangerousUrlIntoTheJournal(): void
+    {
+        $forged = \sprintf(
+            '{"v":1,"t":[{"s":"google","m":"cpc","r":%s,"lp":%s,"at":%d}]}',
+            \json_encode('javascript://evil.example.com/%0aalert(document.cookie)', JSON_THROW_ON_ERROR),
+            \json_encode('https://shop.example.com/checkout?token=secret-reset-token', JSON_THROW_ON_ERROR),
+            $this->clock->now()->getTimestamp() - 3600,
+        );
+
+        $this->handle($this->middleware(), $this->request('/')->withCookieParams(['utm_history' => $forged]));
+
+        $repository = new InMemoryUtmAttributionRepository($this->clock);
+        $created = (new UtmAttributionService($repository))->record(new UtmAttributionEvent(
+            entityId: 'user-1',
+            eventId: 'signup-1',
+            interactionType: InteractionType::of('signup'),
+            history: UtmRequest::history($this->seenRequest()),
+        ));
+
+        $record = $repository->findFirst('user-1');
+
+        Assert::same($created, 1);
+        Assert::null($record?->attribution()->touchpoint->referrer);
         Assert::same(
-            UtmRequest::history($this->seenRequest())->latest()?->occurredAt->format('Y-m-d H:i:s'),
-            '2026-05-03 12:00:00',
+            $record?->attribution()->touchpoint->landingPage,
+            'https://shop.example.com/checkout',
         );
     }
 
@@ -333,6 +470,7 @@ final class UtmCaptureMiddlewareTest
         bool $clearHistoryWithoutConsent = false,
         int $maxTouchpoints = 5,
         array $ignoredPaths = [],
+        int $maxTouchpointAge = UtmCaptureMiddleware::DEFAULT_MAX_TOUCHPOINT_AGE,
     ): UtmCaptureMiddleware {
         return new UtmCaptureMiddleware(
             sources: [new QueryUtmSource($this->clock)],
@@ -342,6 +480,7 @@ final class UtmCaptureMiddlewareTest
             similarity: UtmSimilarity::Full,
             ignoredPaths: $ignoredPaths,
             maxTouchpoints: $maxTouchpoints,
+            maxTouchpointAge: $maxTouchpointAge,
             enabled: $enabled,
             updateExisting: $updateExisting,
             captureOrganic: $captureOrganic,

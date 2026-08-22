@@ -61,8 +61,31 @@ Or with Make: `make build`, `make cs-fix`, `make psalm`, `make test`,
   query string differs on every visit and would defeat deduplication.
 - `InteractionType` is a validated string, not an enum — its pattern matches
   the width of the storage column.
-- `Referrer` accepts an already sanitised URL; sanitising is the capture
-  layer's job, so the value object stays free of service dependencies.
+- `Referrer` accepts an already sanitised URL; stripping the query is the
+  capture layer's job, so the value object stays free of service dependencies.
+  The **scheme** is the exception and is checked inside `Referrer::of()`: that
+  factory is the single gate every referrer passes — capture, cookie decoding
+  and a storage adapter reading a row back — so `http`/`https` enforcement one
+  layer up would leave the other two open.
+- **The cookie is untrusted input, not this package's own output.**
+  `UtmCookieCodec::decode()` re-sanitises `r` and `lp` through a
+  `LandingPageSanitizer`, and `config/di.php` hands it the container's
+  sanitizer so an application allow-list applies to both paths. A
+  round-trip property therefore holds only for sanitizer fixed points —
+  that is the contract, not a test defect.
+- **`UtmCookieCodec::$maxLength` is the percent-encoded length.**
+  `Yiisoft\Cookies\Cookie` calls `urlencode()` on the value, which triples every
+  JSON structural character and every non-ASCII byte. A test measuring the raw
+  JSON reproduces the bug the code used to have; assert on the real
+  `Set-Cookie` header instead.
+- **A stale `occurredAt` drops the touchpoint, it is not clamped.** Moving a
+  claim to `now - maxTouchpointAge` invents a timestamp that changes daily and
+  keeps the touchpoint alive forever, since the moved value always lands back
+  inside the window. `UtmCaptureMiddleware::process()` compares the resulting
+  history against **what was read**, not against the filtered value — otherwise
+  a dropped touchpoint is never written out of the cookie. Every step in that
+  chain returns the identical object when it changes nothing, which is what
+  keeps an unchanged response free of `Set-Cookie` and cacheable.
 - Psalm annotations are written up front: `non-empty-string`, `list<T>`,
   `array{...}` shapes, `@psalm-type`. See rule 11 of the root `AGENTS.md`.
 - Code: `declare(strict_types=1)`, `final readonly class`, `#[\Override]`,

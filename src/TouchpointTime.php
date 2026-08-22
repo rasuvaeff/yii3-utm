@@ -30,24 +30,35 @@ final readonly class TouchpointTime
     }
 
     /**
-     * Keeps the moment inside `[now - maxAgeSeconds, now]`.
+     * Caps a claim about the future to `now`, and rejects a claim older than
+     * `now - maxAgeSeconds`.
+     *
+     * The two halves are deliberately asymmetric. A moment in the future cannot
+     * be true, and `now` is the nearest moment that can be — capping is a
+     * correction. A moment before the retention window may well be true; moving
+     * it to the window boundary would invent a timestamp that changes on every
+     * request and would keep the touchpoint alive forever, since it lands back
+     * inside the window each time. Out of the window means out of the history.
+     *
+     * The clock is read once: two reads could straddle a second boundary and
+     * decide "future" and "stale" against different values of `now`.
      *
      * @param int<0, max> $maxAgeSeconds
+     *
+     * @return \DateTimeImmutable|null null when the claim is older than the window
      */
-    public static function clamp(
+    public static function withinWindow(
         \DateTimeImmutable $occurredAt,
         ClockInterface $clock,
         int $maxAgeSeconds,
-    ): \DateTimeImmutable {
+    ): ?\DateTimeImmutable {
         $now = $clock->now();
 
         if ($occurredAt > $now) {
             return $now;
         }
 
-        $earliest = $now->sub(new \DateInterval('PT' . $maxAgeSeconds . 'S'));
-
-        return $occurredAt < $earliest ? $earliest : $occurredAt;
+        return $occurredAt < $now->sub(new \DateInterval('PT' . $maxAgeSeconds . 'S')) ? null : $occurredAt;
     }
 
     private static function tryParse(string $value): ?\DateTimeImmutable

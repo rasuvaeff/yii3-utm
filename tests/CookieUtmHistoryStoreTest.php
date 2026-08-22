@@ -100,6 +100,44 @@ final class CookieUtmHistoryStoreTest
         Assert::string($header)->contains('Domain=example.com');
     }
 
+    /**
+     * The assertion is on the header the browser receives, not on the JSON the
+     * codec produced. Measuring the raw value here would reproduce exactly the
+     * mistake the codec used to make: `Cookie::__toString()` percent-encodes
+     * the value, a history of Cyrillic campaigns triples in size, and a cookie
+     * whose name and value exceed 4096 bytes is dropped by the browser without
+     * an error anywhere.
+     */
+    public function theSetCookieHeaderStaysInsideTheBrowserLimit(): void
+    {
+        $touchpoints = [];
+
+        for ($i = 0; $i < 5; ++$i) {
+            $touchpoints[] = UtmTouchpoint::of(
+                utm: new UtmParameters(
+                    source: 'яндекс-директ',
+                    medium: 'контекстная-реклама',
+                    campaign: \str_repeat('летняя-распродажа-', 12),
+                    term: \str_repeat('купить-', 10),
+                    content: \str_repeat('баннер-', 10),
+                ),
+                occurredAt: new \DateTimeImmutable(
+                    \sprintf('2026-07-%02d 10:00:00', $i + 1),
+                    new \DateTimeZone('UTC'),
+                ),
+            );
+        }
+
+        $header = $this->store()->write(new Response(), UtmHistory::of(...$touchpoints))
+            ->getHeaderLine('Set-Cookie');
+        $pair = \explode(';', $header)[0];
+
+        Assert::true(\strlen($pair) <= 4096);
+        Assert::false($this->store()->read(
+            (new ServerRequest('GET', '/'))->withCookieParams(['utm_history' => $this->cookieValue($header)]),
+        )->isEmpty());
+    }
+
     public function forgetExpiresTheCookie(): void
     {
         $header = $this->store()->forget(new Response())->getHeaderLine('Set-Cookie');

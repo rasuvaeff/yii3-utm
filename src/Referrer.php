@@ -11,6 +11,12 @@ namespace Rasuvaeff\Yii3Utm;
  * parameters is the job of {@see LandingPageSanitizer} in the capture layer, so
  * that this type stays free of service dependencies.
  *
+ * The scheme, however, is checked here and not delegated. This constructor is
+ * the single gate every referrer passes — the capture sources, the cookie codec
+ * and a storage adapter reading a row back all go through it — so a
+ * `javascript:` or `data:` URL rejected only in the capture layer would still
+ * arrive from a hand-edited cookie or from a row written by an older version.
+ *
  * Only the host takes part in the attribution fingerprint — a full URL with its
  * query string would differ on every visit and defeat deduplication.
  *
@@ -24,6 +30,11 @@ final readonly class Referrer
     public const int MAX_HOST_LENGTH = 255;
 
     /**
+     * @var list<non-empty-string>
+     */
+    private const array ALLOWED_SCHEMES = ['http', 'https'];
+
+    /**
      * @param non-empty-string $url
      * @param non-empty-string $host
      */
@@ -33,13 +44,20 @@ final readonly class Referrer
     ) {}
 
     /**
-     * @param string $sanitizedUrl absolute URL already passed through a sanitizer
+     * @param string $sanitizedUrl absolute `http`/`https` URL already passed
+     *        through a sanitizer; anything else yields null
      */
     public static function of(string $sanitizedUrl): ?self
     {
         $url = \trim(\preg_replace('/[\x00-\x1F\x7F]+/u', '', $sanitizedUrl) ?? '');
 
         if ($url === '' || \mb_strlen($url) > self::MAX_URL_LENGTH) {
+            return null;
+        }
+
+        $scheme = \parse_url($url, PHP_URL_SCHEME);
+
+        if (!\is_string($scheme) || !\in_array(\mb_strtolower($scheme), self::ALLOWED_SCHEMES, strict: true)) {
             return null;
         }
 

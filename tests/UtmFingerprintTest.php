@@ -10,6 +10,7 @@ use Rasuvaeff\PropertyTesting\Property;
 use Rasuvaeff\Yii3Utm\ClickIds;
 use Rasuvaeff\Yii3Utm\InteractionType;
 use Rasuvaeff\Yii3Utm\Referrer;
+use Rasuvaeff\Yii3Utm\Tests\Support\StrictErrors;
 use Rasuvaeff\Yii3Utm\UtmFingerprint;
 use Rasuvaeff\Yii3Utm\UtmParameters;
 use Rasuvaeff\Yii3Utm\UtmTouchpoint;
@@ -79,6 +80,19 @@ final class UtmFingerprintTest
             UtmFingerprint::of('user-1', InteractionType::purchase(), $second),
             UtmFingerprint::of('user-1', InteractionType::purchase(), $first),
         );
+    }
+
+    /**
+     * A missing referrer serialises to `"referrer_host":null` whether the `?->`
+     * short-circuits or PHP reads the property on `null` and falls back to the
+     * same value. The only difference is the `E_WARNING` of the second path, so
+     * the signature has to be produced under a handler that escalates it.
+     */
+    public function signsATouchpointWithoutReferrer(): void
+    {
+        $signature = StrictErrors::run(fn(): string => UtmFingerprint::signature($this->touchpoint()));
+
+        Assert::string($signature)->contains('"referrer_host":null');
     }
 
     public function dependsOnClickIds(): void

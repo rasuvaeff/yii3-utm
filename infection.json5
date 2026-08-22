@@ -8,18 +8,39 @@
         "summary": "build/infection-summary.log"
     },
     "testFramework": "testo",
-    // Achieved Covered Code MSI 96.11% (469/488). The floor stays at 96. The
-    // 17 remaining escapees are true equivalents — verified one by one, not
-    // coverage gaps (Infection also reported one errored and one timed-out
-    // mutant, neither of which survived as normal behavior):
+    // Achieved Covered Code MSI 97.32% (542/559 killed, Mutation Code Coverage
+    // 100%, 2026-08-22, re-measured for 1.1.0). The floor stays at 97: the
+    // margin above it is under two mutants, and a floor that tight fails on
+    // noise rather than on a regression. The 15 remaining escapees are true
+    // equivalents — verified one by one, not coverage gaps (Infection also
+    // reported one errored and one timed-out mutant, neither of which survived
+    // as normal behavior).
+    //
+    // Four mutants that used to sit in this list were not equivalent at all:
+    // they only looked equal because PHP degrades a missing property or an
+    // undefined variable to `null` plus an E_WARNING, and Testo does not fail a
+    // test on a warning. They are killed honestly now — the covering tests run
+    // the code through `Tests\Support\StrictErrors`, which escalates every
+    // diagnostic to an ErrorException (NullSafePropertyCall in UtmCookieCodec
+    // and UtmFingerprint, ReturnRemoval in the JsonException catch of
+    // UtmCookieCodec and HeaderUtmSource). Anything left below is a semantic
+    // equivalence, not a suppressed diagnostic:
     //   - ReturnRemoval early-exits whose fall-through reaches the same return
-    //     via the next guard (BodyUtmSource:47, DefaultLandingPageSanitizer:43
-    //     and :78, HeaderUtmSource:66, UtmCookieCodec:71,
-    //     UtmParameters:103).
-    //   - CastInt in InMemoryUtmAttributionRepository:122 (two operands) — the
+    //     via the next guard, with every variable it reads defined
+    //     (BodyUtmSource:47, DefaultLandingPageSanitizer:46, :88 and :132,
+    //     UtmParameters:103). The :88 one is the empty-query shortcut of
+    //     `fit()`: without it `explode('&', '')` yields one empty pair, the
+    //     loop keeps nothing, and the very next statement calls the same
+    //     `cut($base)` the shortcut called.
+    //   - MBString on the query budget (DefaultLandingPageSanitizer:100) —
+    //     `$candidate` is built from `http_build_query()` output, which
+    //     percent-encodes every non-ASCII byte, so bytes and code points
+    //     always agree there. `mb_strlen()` is kept because the budget it is
+    //     compared against is a code-point budget.
+    //   - CastInt in InMemoryUtmAttributionRepository:140 (two operands) — the
     //     id column is a numeric string, and PHP's <=> coerces operands, so
     //     dropping either cast yields the same ordering.
-    //   - MBString on URL scheme (DefaultLandingPageSanitizer:52) — RFC schemes
+    //   - MBString on URL scheme (DefaultLandingPageSanitizer:55) — RFC schemes
     //     are ASCII-only, so mb_strtolower and strtolower agree.
     //   - BitwiseOr on ClickIds JSON flags (ClickIds:134) — the value pattern
     //     forbids '/', so UNESCAPED_SLASHES is a no-op on real input.
@@ -29,12 +50,15 @@
     //     unrelated query keys, while click ids are filtered independently.
     //   - UnwrapArrayValues in UtmHistory:34 — `...$touchpoints` always yields
     //     a 0-indexed list, so array_values is a no-op.
-    //   - TouchpointTime boundaries (:44, :50) — at occurredAt === now and
-    //     occurredAt === earliest both branches return the same value.
-    //   - NullSafePropertyCall (UtmCookieCodec:110, UtmFingerprint:33) — on PHP
-    //     8.5, `null->property` emits E_WARNING and evaluates to null. Testo does
-    //     not promote that warning to failure, so the observed value is equal.
-    "minMsi": 96,
+    //   - MBString on the referrer scheme (Referrer:60) — RFC 3986 schemes are
+    //     ASCII-only, so mb_strtolower and strtolower agree. Same class as
+    //     DefaultLandingPageSanitizer:55 above.
+    //   - Continue_ -> break in UtmCaptureMiddleware::withinWindow (:144) —
+    //     UtmHistory is sorted newest first, so every touchpoint after a stale
+    //     one is older and therefore stale too. Skipping the rest and dropping
+    //     the rest produce the identical kept list. The equivalence rests on
+    //     that sort invariant, not on the loop.
+    "minMsi": 97,
     "mutators": {
         "@default": true
     }
