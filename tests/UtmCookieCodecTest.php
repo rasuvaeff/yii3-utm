@@ -11,6 +11,7 @@ use Rasuvaeff\PropertyTesting\Property;
 use Rasuvaeff\Yii3Utm\ClickIds;
 use Rasuvaeff\Yii3Utm\DefaultLandingPageSanitizer;
 use Rasuvaeff\Yii3Utm\Referrer;
+use Rasuvaeff\Yii3Utm\Tests\Support\StrictErrors;
 use Rasuvaeff\Yii3Utm\UtmCookieCodec;
 use Rasuvaeff\Yii3Utm\UtmHistory;
 use Rasuvaeff\Yii3Utm\UtmParameters;
@@ -81,9 +82,18 @@ final class UtmCookieCodecTest
         Assert::true(\strlen($full) < \strlen(\urlencode($full)));
     }
 
+    /**
+     * Dropping the `?->` on a missing referrer produces a byte-identical
+     * payload — `array_filter` removes the key either way — so no assertion on
+     * the encoded string can tell the two apart. What differs is the
+     * `E_WARNING` PHP emits when a property is read on `null`, so the payload
+     * is built under a handler that escalates diagnostics to exceptions.
+     */
     public function encodeHandlesATouchpointWithoutReferrer(): void
     {
-        $encoded = $this->codec->encode(UtmHistory::of($this->touchpoint('google')));
+        $encoded = StrictErrors::run(
+            fn(): string => $this->codec->encode(UtmHistory::of($this->touchpoint('google'))),
+        );
 
         Assert::false(\str_contains($encoded, '"r"'));
         Assert::true(\str_contains($encoded, '"s":"google"'));
@@ -121,10 +131,19 @@ final class UtmCookieCodecTest
         Assert::same($decoded->latest()?->utm->source, 'newer');
     }
 
+    /**
+     * The same blind spot on the decoding side: without the early return in the
+     * `JsonException` catch, the next guard reads an **undefined** `$decoded`,
+     * which is `null` plus an `E_WARNING`, and the history comes back empty
+     * either way. Escalating the warning is what makes the missing return
+     * observable.
+     */
     #[DataProvider('unusableValuesProvider')]
     public function decodesUnusableValuesToEmptyHistory(?string $value): void
     {
-        Assert::true($this->codec->decode($value)->isEmpty());
+        $history = StrictErrors::run(fn(): UtmHistory => $this->codec->decode($value));
+
+        Assert::true($history->isEmpty());
     }
 
     public static function unusableValuesProvider(): iterable

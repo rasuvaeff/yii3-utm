@@ -7,6 +7,8 @@ namespace Rasuvaeff\Yii3Utm\Tests;
 use Nyholm\Psr7\ServerRequest;
 use Rasuvaeff\Yii3Utm\HeaderUtmSource;
 use Rasuvaeff\Yii3Utm\Tests\Support\FrozenClock;
+use Rasuvaeff\Yii3Utm\Tests\Support\StrictErrors;
+use Rasuvaeff\Yii3Utm\UtmTouchpoint;
 use Testo\Assert;
 use Testo\Codecov\Covers;
 use Testo\Lifecycle\BeforeTest;
@@ -45,13 +47,23 @@ final class HeaderUtmSourceTest
         Assert::same($touchpoint?->occurredAt->format('Y-m-d H:i:s'), '2026-07-01 10:00:00');
     }
 
+    /**
+     * Without the early return in the `JsonException` catch, the next guard
+     * reads an **undefined** `$decoded`: `null` plus an `E_WARNING`, and the
+     * click ids come back empty either way. Escalating the warning is what
+     * makes the missing return observable.
+     */
     public function ignoresMalformedClickIdJson(): void
     {
         $request = $this->request()
             ->withHeader('X-Utm-Source', 'google')
             ->withHeader('X-Utm-Click-Ids', '{broken');
 
-        Assert::true((new HeaderUtmSource($this->clock))->extract($request)?->clickIds->isEmpty());
+        $touchpoint = StrictErrors::run(
+            fn(): ?UtmTouchpoint => (new HeaderUtmSource($this->clock))->extract($request),
+        );
+
+        Assert::true($touchpoint?->clickIds->isEmpty());
     }
 
     public function restrictsClickIdsAndSupportsACustomPrefix(): void

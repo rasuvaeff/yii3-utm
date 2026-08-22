@@ -8,15 +8,26 @@
         "summary": "build/infection-summary.log"
     },
     "testFramework": "testo",
-    // Achieved Covered Code MSI 96% (510/529 killed, 2026-08-22 after the
-    // untrusted-cookie hardening). The floor stays at 96. The 17 remaining
+    // Achieved Covered Code MSI 97% (514/529 killed, Mutation Code Coverage
+    // 100%, 2026-08-22). The floor is raised to 97 to match. The 13 remaining
     // escapees are true equivalents — verified one by one, not coverage gaps
     // (Infection also reported one errored and one timed-out mutant, neither
-    // of which survived as normal behavior):
+    // of which survived as normal behavior).
+    //
+    // Four mutants that used to sit in this list were not equivalent at all:
+    // they only looked equal because PHP degrades a missing property or an
+    // undefined variable to `null` plus an E_WARNING, and Testo does not fail a
+    // test on a warning. They are killed honestly now — the covering tests run
+    // the code through `Tests\Support\StrictErrors`, which escalates every
+    // diagnostic to an ErrorException (NullSafePropertyCall in UtmCookieCodec
+    // and UtmFingerprint, ReturnRemoval in the JsonException catch of
+    // UtmCookieCodec and HeaderUtmSource). Anything left below is a semantic
+    // equivalence, not a suppressed diagnostic:
     //   - ReturnRemoval early-exits whose fall-through reaches the same return
-    //     via the next guard (BodyUtmSource:47, DefaultLandingPageSanitizer:43
-    //     and :78, HeaderUtmSource:69, UtmParameters:103).
-    //   - CastInt in InMemoryUtmAttributionRepository:122 (two operands) — the
+    //     via the next guard, with every variable it reads defined
+    //     (BodyUtmSource:47, DefaultLandingPageSanitizer:43 and :78,
+    //     UtmParameters:103).
+    //   - CastInt in InMemoryUtmAttributionRepository:140 (two operands) — the
     //     id column is a numeric string, and PHP's <=> coerces operands, so
     //     dropping either cast yields the same ordering.
     //   - MBString on URL scheme (DefaultLandingPageSanitizer:52) — RFC schemes
@@ -29,9 +40,6 @@
     //     unrelated query keys, while click ids are filtered independently.
     //   - UnwrapArrayValues in UtmHistory:34 — `...$touchpoints` always yields
     //     a 0-indexed list, so array_values is a no-op.
-    //   - ReturnRemoval in UtmCookieCodec:100 (the JsonException catch) — the
-    //     fall-through hits the next guard, which rejects the undefined
-    //     $decoded and returns the same empty history.
     //   - MBString on the referrer scheme (Referrer:60) — RFC 3986 schemes are
     //     ASCII-only, so mb_strtolower and strtolower agree. Same class as
     //     DefaultLandingPageSanitizer:52 above.
@@ -40,10 +48,7 @@
     //     one is older and therefore stale too. Skipping the rest and dropping
     //     the rest produce the identical kept list. The equivalence rests on
     //     that sort invariant, not on the loop.
-    //   - NullSafePropertyCall (UtmCookieCodec:139, UtmFingerprint:33) — on PHP
-    //     8.5, `null->property` emits E_WARNING and evaluates to null. Testo does
-    //     not promote that warning to failure, so the observed value is equal.
-    "minMsi": 96,
+    "minMsi": 97,
     "mutators": {
         "@default": true
     }
