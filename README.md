@@ -206,10 +206,19 @@ name and its attributes inside the 4096-byte browser limit.
 stateless APIs and cacheable routes, since capture otherwise adds a
 `Set-Cookie` header and makes a response uncacheable.
 
+The cookie is written **only when the history changes**, which is what keeps an
+unchanged response free of `Set-Cookie` and cacheable — and what makes `ttlDays`
+count from the last *touchpoint*, not from the last *visit*. A visitor who
+returns daily through a direct link gets no new `Set-Cookie`, so the attribution
+window closes 30 days after the last campaign touch even though the visitor
+never left. Refreshing the cookie on a plain visit would need a "written at"
+stamp in the cookie payload and would put `Set-Cookie` on responses that are
+cacheable today; raise `ttlDays` if a longer window is what you need.
+
 | Option | Default | Effect |
 |---|---|---|
 | `enabled` | `true` | Master switch |
-| `ignoredPaths` | `[]` | Path prefixes to skip |
+| `ignoredPaths` | `[]` | Paths to skip, matched on a segment boundary: `/api` skips `/api` and `/api/v1`, but not `/api-docs` |
 | `similarity` | `Full` | What counts as "the same campaign" |
 | `updateExisting` | `false` | Whether a touchpoint similar to the newest stored one is appended |
 | `captureOrganic` | `false` | Whether a visit with neither campaign nor click id becomes a touchpoint |
@@ -306,8 +315,16 @@ insert" is not enough.
 | Ordering | Server-assigned; a late delivery cannot become the first touch |
 | Deduplication | Fingerprint and dedupe key are derived, never accepted from callers |
 | Referrer | `http`/`https` only; only its host takes part in the fingerprint |
-| Landing page | Truncated to 500 characters; query sanitisation is applied before storage |
+| Landing page | Truncated to 500 characters on a boundary that keeps it a URL; query sanitisation is applied before storage |
 | Cookie | Sanitised on decoding exactly like a query string, and its size is budgeted after percent-encoding |
+
+**Escaping is the consumer's job.** Normalisation strips control characters,
+trims and truncates — it does not make a value safe to render.
+`?utm_source=<img src=x onerror=alert(1)>` reaches the cookie, the request
+attributes and the attribution journal as that exact text, because a library
+that renders nothing cannot know which context (HTML, an attribute, JSON, a
+CSV cell) the value will end up in. Escape at the point of output — a marketing
+dashboard listing campaign names is the typical place this matters.
 
 ## Examples
 

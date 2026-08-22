@@ -18,7 +18,9 @@ composer require rasuvaeff/yii3-utm
 
 1. Everything from the client — query, headers, body, cookies, `localStorage` —
    is untrusted. Values are normalised, truncated or dropped, never
-   authenticated.
+   authenticated. Normalisation is not escaping: a value stays arbitrary text
+   (`utm_source=<img src=x onerror=alert(1)>` survives intact), so escaping at
+   the point of output is the consumer's job.
 2. `occurredAt` is a claim by the source. It never decides ordering; the server
    assigns order when a row is written, so a late delivery cannot become the
    first touch.
@@ -201,6 +203,12 @@ host, port and path, drops the fragment and every query parameter outside its
 allow-list (`utm_*` and click ids by default), and truncates to 500 characters.
 Non-http(s) schemes and relative URLs sanitise to an empty string.
 
+Truncation cuts on a boundary the sanitizer can read back: a whole query pair,
+never inside a percent-triplet, never leaving a dangling `?` or the `:` of a
+port whose digits did not fit. That is what makes
+`sanitize(sanitize($url)) === sanitize($url)` hold — the guarantee only assumes
+`maxLength` still admits `scheme://` plus one character of the host.
+
 ### UtmAttribution
 
 Immutable command. `fingerprint` and `dedupeKey` are computed in the
@@ -299,6 +307,14 @@ $middleware = new UtmCaptureMiddleware(
     clearHistoryWithoutConsent: false,
 );
 ```
+
+`ignoredPaths` matches on a segment boundary — the path itself or anything
+below it. `/api` skips `/api` and `/api/v1` and leaves `/api-docs` alone.
+
+The cookie is rewritten only when the history changes, which keeps an unchanged
+response cacheable and makes `ttlDays` count from the last touchpoint, not from
+the last visit: a visitor returning daily through a direct link still loses the
+history 30 days after the last campaign touch.
 
 Request attributes (always set, `UtmAttributes::CURRENT|HISTORY|EFFECTIVE`):
 

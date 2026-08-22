@@ -9,6 +9,10 @@ use Nyholm\Psr7\ServerRequest;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
+use Rasuvaeff\PropertyTesting\ArbitraryInterface;
+use Rasuvaeff\PropertyTesting\Classify;
+use Rasuvaeff\PropertyTesting\Gen;
+use Rasuvaeff\PropertyTesting\Property;
 use Rasuvaeff\Yii3Utm\CallbackConsentPolicy;
 use Rasuvaeff\Yii3Utm\CookieUtmHistoryStore;
 use Rasuvaeff\Yii3Utm\InMemoryUtmAttributionRepository;
@@ -31,6 +35,7 @@ use Rasuvaeff\Yii3Utm\UtmSimilarity;
 use Rasuvaeff\Yii3Utm\UtmTouchpoint;
 use Testo\Assert;
 use Testo\Codecov\Covers;
+use Testo\Data\DataProvider;
 use Testo\Lifecycle\BeforeTest;
 use Testo\Test;
 
@@ -152,6 +157,68 @@ final class UtmCaptureMiddlewareTest
         $this->handle($this->middleware(ignoredPaths: ['']), $this->request('/?utm_source=google'));
 
         Assert::same(UtmRequest::current($this->seenRequest())?->utm->source, 'google');
+    }
+
+    public function anEmptyIgnoredPatternDoesNotStopTheScan(): void
+    {
+        $this->handle($this->middleware(ignoredPaths: ['', '/api']), $this->request('/api?utm_source=google'));
+
+        Assert::null(UtmRequest::current($this->seenRequest()));
+    }
+
+    #[DataProvider('ignoredPathBoundaryProvider')]
+    public function matchesAnIgnoredPathOnASegmentBoundary(string $ignored, string $path, bool $skipped): void
+    {
+        $this->handle($this->middleware(ignoredPaths: [$ignored]), $this->request($path . '?utm_source=google'));
+
+        Assert::same(UtmRequest::current($this->seenRequest())?->utm->source, $skipped ? null : 'google');
+    }
+
+    public static function ignoredPathBoundaryProvider(): iterable
+    {
+        yield 'the path itself' => ['/api', '/api', true];
+
+        yield 'a path below it' => ['/api', '/api/v1', true];
+
+        yield 'a sibling sharing the prefix' => ['/api', '/api-docs', false];
+
+        yield 'a longer name sharing the prefix' => ['/health', '/healthz-external', false];
+
+        yield 'a trailing slash still covers the subtree' => ['/api/', '/api/v1', true];
+
+        yield 'the root covers everything' => ['/', '/anything', true];
+    }
+
+    /**
+     * The boundary is the whole point of the comparison: `/api` must cover its
+     * own subtree and nothing that merely starts with those four characters.
+     */
+    #[Property(runs: 100, timeoutMs: 2000)]
+    public function ignoresAPathOnlyOnASegmentBoundary(string $segment, string $suffix): void
+    {
+        $ignored = '/' . $segment;
+        $skipped = $suffix === '' || \str_starts_with($suffix, '/');
+
+        Classify::cover($skipped, 'ignored', 20);
+        Classify::cover(!$skipped, 'captured', 20);
+
+        $this->handle(
+            $this->middleware(ignoredPaths: [$ignored]),
+            $this->request($ignored . $suffix . '?utm_source=google'),
+        );
+
+        Assert::same(UtmRequest::current($this->seenRequest())?->utm->source, $skipped ? null : 'google');
+    }
+
+    /**
+     * @return array<string, ArbitraryInterface>
+     */
+    public static function ignoresAPathOnlyOnASegmentBoundaryGenerators(): array
+    {
+        return [
+            'segment' => Gen::stringFrom('abc', 1, 8),
+            'suffix' => Gen::elements(['', '/', '/v1', '-docs', 'z-external', '_v2', '.json']),
+        ];
     }
 
     public function captureFallsThroughToTheNextSource(): void

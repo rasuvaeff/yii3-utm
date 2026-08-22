@@ -34,7 +34,8 @@ final readonly class UtmCaptureMiddleware implements MiddlewareInterface
 
     /**
      * @param list<UtmSource> $sources in priority order; the first non-null result wins
-     * @param list<string> $ignoredPaths request paths to skip, matched by prefix
+     * @param list<string> $ignoredPaths request paths to skip, matched on a segment
+     *        boundary: `/api` skips `/api` and `/api/v1`, but not `/api-docs`
      * @param int<1, max> $maxTouchpoints
      * @param int<0, max> $maxTouchpointAge how old a claimed moment may be, in seconds;
      *        an older claim produces no touchpoint and drops a stored one
@@ -182,12 +183,22 @@ final readonly class UtmCaptureMiddleware implements MiddlewareInterface
             ->withAttribute(UtmAttributes::EFFECTIVE, $current ?? $history->latest());
     }
 
+    /**
+     * A bare `str_starts_with()` made `/api` swallow `/api-docs` and `/health`
+     * swallow `/healthz-external`: capture then silently stopped on routes the
+     * application never meant to exclude. The comparison is made on a segment
+     * boundary — the entry itself, or anything below it.
+     */
     private function isIgnored(ServerRequestInterface $request): bool
     {
         $path = $request->getUri()->getPath();
 
         foreach ($this->ignoredPaths as $ignored) {
-            if ($ignored !== '' && \str_starts_with($path, $ignored)) {
+            if ($ignored === '') {
+                continue;
+            }
+
+            if ($path === $ignored || \str_starts_with($path, \rtrim($ignored, '/') . '/')) {
                 return true;
             }
         }
