@@ -8,6 +8,7 @@ use Rasuvaeff\PropertyTesting\ArbitraryInterface;
 use Rasuvaeff\PropertyTesting\Classify;
 use Rasuvaeff\PropertyTesting\Gen;
 use Rasuvaeff\PropertyTesting\Property;
+use Rasuvaeff\PropertyTesting\Target;
 use Rasuvaeff\Yii3Utm\ClickIds;
 use Rasuvaeff\Yii3Utm\DefaultLandingPageSanitizer;
 use Rasuvaeff\Yii3Utm\Referrer;
@@ -367,15 +368,46 @@ final class UtmCookieCodecTest
     {
         return [
             'campaigns' => Gen::arrayOf(
-                Gen::oneOf(
-                    Gen::stringFrom('abcdefghij-', 1, 80),
-                    Gen::stringFrom('абвгдежзий-', 1, 80),
-                ),
+                Gen::frequency([
+                    [1, Gen::stringFrom('abcdefghij-', 1, 80)],
+                    [1, Gen::stringFrom('абвгдежзий-', 1, 80)],
+                ]),
                 0,
                 5,
             ),
             'maxLength' => Gen::intBetween(40, 4000),
         ];
+    }
+
+    /**
+     * Same envelope as {@see theEncodedValueNeverExceedsTheBudget}, but the
+     * search phase steers inputs toward the largest percent-encoded length it
+     * can reach instead of relying on uniform sampling. Reuses the same
+     * generators and assertion — only how hard the property looks for the
+     * boundary the eviction loop must respect.
+     */
+    #[Property(runs: 100, searchRuns: 150, generators: 'theEncodedValueNeverExceedsTheBudgetGenerators')]
+    public function theEncodedValueSearchClimbsTowardTheBudgetWithoutExceedingIt(array $campaigns, int $maxLength): void
+    {
+        $touchpoints = [];
+
+        foreach (\array_values($campaigns) as $index => $campaign) {
+            $touchpoints[] = UtmTouchpoint::of(
+                utm: UtmParameters::fromArray(['utm_source' => 'google', 'utm_campaign' => $campaign]),
+                occurredAt: new \DateTimeImmutable(
+                    \sprintf('2026-06-%02d 10:00:00', ($index % 27) + 1),
+                    new \DateTimeZone('UTC'),
+                ),
+            );
+        }
+
+        $codec = new UtmCookieCodec(maxLength: $maxLength);
+        $encoded = $codec->encode(UtmHistory::of(...$touchpoints));
+        $encodedLength = \strlen(\urlencode($encoded));
+
+        Target::maximize('encodedLength', $encodedLength);
+
+        Assert::true($encodedLength <= $maxLength);
     }
 
     /**
