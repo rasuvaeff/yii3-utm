@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Rasuvaeff\Yii3Utm\Tests;
 
+use Rasuvaeff\PropertyTesting\ArbitraryInterface;
+use Rasuvaeff\PropertyTesting\Gen;
+use Rasuvaeff\PropertyTesting\Property;
 use Rasuvaeff\Yii3Utm\InteractionType;
 use Testo\Assert;
 use Testo\Codecov\Covers;
@@ -73,5 +76,39 @@ final class InteractionTypeTest
     public function castsToString(): void
     {
         Assert::same((string) InteractionType::purchase(), 'purchase');
+    }
+
+    /**
+     * `of()` accepts a string exactly when it matches {@see InteractionType::PATTERN}
+     * — generated from a mix of strings built to match the pattern and plain
+     * ASCII noise, so both the accept and the reject side are exercised
+     * without discarding anything via `Assume`.
+     */
+    #[Property(runs: 300)]
+    public function ofAcceptsExactlyStringsMatchingThePattern(string $candidate): void
+    {
+        $matches = \preg_match(InteractionType::PATTERN, $candidate) === 1;
+
+        try {
+            $type = InteractionType::of($candidate);
+        } catch (\InvalidArgumentException) {
+            Assert::false($matches);
+
+            return;
+        }
+
+        Assert::true($matches);
+        Assert::same($type->value, $candidate);
+    }
+
+    /** @return array<string, ArbitraryInterface> */
+    public static function ofAcceptsExactlyStringsMatchingThePatternGenerators(): array
+    {
+        return [
+            'candidate' => Gen::frequency([
+                [3, Gen::regex('^[a-z][a-z0-9_]{0,31}$')],
+                [2, Gen::stringAscii()],
+            ]),
+        ];
     }
 }
