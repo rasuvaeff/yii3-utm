@@ -8,8 +8,10 @@
         "summary": "build/infection-summary.log"
     },
     "testFramework": "testo",
-    // Achieved Covered Code MSI 97.32% (542/559 killed, Mutation Code Coverage
-    // 100%, 2026-08-22, re-measured for 1.1.0). The floor stays at 97: the
+    // Achieved overall MSI 97.32% (545/560 detected, 15 escaped, 14 ignored by the
+    // template settings, Not Covered 0), measured with --with-uncovered on
+    // 2026-11-01; Covered Code MSI is the same because nothing is left uncovered.
+    // The floor stays at 97: the
     // margin above it is under two mutants, and a floor that tight fails on
     // noise rather than on a regression. The 15 remaining escapees are true
     // equivalents — verified one by one, not coverage gaps (Infection also
@@ -60,6 +62,24 @@
     //     that sort invariant, not on the loop.
     "minMsi": 97,
     "mutators": {
-        "@default": true
+        "@default": true,
+        // Constructor/method parameter declarations with a default value
+        // (`private int $x = 100,`, `bool $strict = false,`): the mutant sits on a
+        // signature line with no executable opcode under pcov, so it is reported Not
+        // Covered whatever the tests do. Only a type-prefixed `$name = default,` line
+        // matches; a body line cannot (no type before the variable). Do NOT add ^ or $:
+        // Infection wraps the pattern as ^-\s*REGEX$ over the removed diff line.
+        // Verified 2026-11-01 by diffing the survivor lists with and without it:
+        // bulkhead 6, circuit-breaker 13, json-ld 19 mutants removed, all of them
+        // such signature lines; Escaped and Timed Out unchanged.
+        "global-ignoreSourceCodeByRegex": [
+            "(?:(?:private|protected|public|readonly)\\s+)*\\??[A-Za-z_\\\\][\\w\\\\|]*\\s+\\$\\w+\\s*=\\s*[^,;]+,"
+        ],
+        // Off: with --with-uncovered a PublicVisibility mutant sits on a parameterless
+        // method's signature line, which has no executable opcode under pcov/xdebug,
+        // so it is reported Not Covered and can never be killed, whatever #[Covers]
+        // says. Measured on pinned-http-client 2026-11-01: 4 of 4 such mutants were
+        // Not Covered, none killed.
+        "PublicVisibility": false
     }
 }

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Mutation testing now counts code the tests execute without naming it in `#[Covers]`
+  (`infection --with-uncovered`), with `PublicVisibility` off and signature defaults ignored
+  as in the monorepo template; overall MSI 97% (minMsi 97). One test added for `HeaderUtmSource` (click ids that decode to a scalar); no `src/` changes.
+
 ## 1.1.0 — 2026-08-22
 
 Nothing in this release changes a signature, so a BC check reports it clean —

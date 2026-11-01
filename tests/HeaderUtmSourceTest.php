@@ -66,6 +66,17 @@ final class HeaderUtmSourceTest
         Assert::true($touchpoint?->clickIds->isEmpty());
     }
 
+    public function ignoresClickIdsThatDecodeToAScalar(): void
+    {
+        $request = $this->request()
+            ->withHeader('X-Utm-Source', 'google')
+            ->withHeader('X-Utm-Click-Ids', '5');
+
+        $touchpoint = (new HeaderUtmSource($this->clock))->extract($request);
+
+        Assert::true($touchpoint?->clickIds->isEmpty());
+    }
+
     public function restrictsClickIdsAndSupportsACustomPrefix(): void
     {
         $request = $this->request()
